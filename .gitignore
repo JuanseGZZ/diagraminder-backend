@@ -1,11 +1,13 @@
 # Binarios y artefactos: se generan por CI y van a GitHub Releases, no al repo.
 descargas/DiagraMind-Local-*
-descargas/DiagraMind-Connector-*
 descargas/*.zip
 diagramind-local.zip
-diagramind-connector.zip
 
 # Artefactos de PyInstaller
 dist/
 build/
 *.spec
+
+# Bytecode: es basura generada, y este repo es PÚBLICO (lo clona quien lo corre).
+__pycache__/
+*.py[cod]

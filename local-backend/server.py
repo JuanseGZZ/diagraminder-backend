@@ -533,6 +533,59 @@ def watch_state(interval=0.5):
 
 # ===================== HTTP =====================
 
+
+# ===================== LA APP WEB SERVIDA POR ACÁ (doc 37 §F13) =====================
+# El backend puede servir la SPA además de su API. Cuando lo hace, la web y el backend
+# comparten origen (http://127.0.0.1:8765) y eso ES el flag de "modo desktop": la web
+# se da cuenta sola, sin configurar nada, y se ahorra el botón Conectar y el prompt del
+# token (que va inyectado en el HTML, igual que en el panel).
+#
+# De dónde salen los archivos, en orden:
+#   1. DMN_WEB_DIR — un checkout del front (para desarrollar con los dos repos al lado).
+#   2. el directorio `web/` que PyInstaller empaqueta dentro del binario (sys._MEIPASS).
+#   3. nada: este repo es PÚBLICO y el front va OFUSCADO, así que no vive acá. Sin
+#      front, `/` sigue sirviendo el panel de control, como siempre.
+def web_dir():
+    d = os.environ.get("DMN_WEB_DIR")
+    if d and os.path.isdir(d):
+        return os.path.realpath(d)
+    bundled = os.path.join(getattr(sys, "_MEIPASS", ""), "web") if getattr(sys, "_MEIPASS", None) else None
+    if bundled and os.path.isdir(bundled):
+        return bundled
+    return None
+
+
+# Solo estas raíces se sirven. Una lista blanca y no "todo lo que cuelgue del dir"
+# porque el front convive con cosas que NO son de la web (node_modules, .git, el
+# repo entero si DMN_WEB_DIR apunta al checkout).
+WEB_ROOTS = ("app", "dist", "vendor", "docs", "legal", "brand")
+WEB_TYPES = {
+    ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
+    ".mjs": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
+    ".json": "application/json; charset=utf-8", ".svg": "image/svg+xml",
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
+    ".webp": "image/webp", ".ico": "image/x-icon", ".woff": "font/woff",
+    ".woff2": "font/woff2", ".ttf": "font/ttf", ".map": "application/json",
+    ".md": "text/markdown; charset=utf-8", ".wasm": "application/wasm",
+}
+
+
+def web_file(rel):
+    """Ruta absoluta del archivo del front, o None si no corresponde servirlo.
+    Confina: la ruta resuelta tiene que caer DENTRO de una de las raíces blancas."""
+    base = web_dir()
+    if not base or not rel:
+        return None
+    top = rel.split("/", 1)[0]
+    if top not in WEB_ROOTS:
+        return None
+    full = os.path.realpath(os.path.join(base, rel))
+    root = os.path.realpath(os.path.join(base, top))
+    if full != root and not full.startswith(root + os.sep):
+        return None
+    return full if os.path.isfile(full) else None
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = f"{NAME}/{VERSION}"
 
@@ -700,6 +753,47 @@ class Handler(BaseHTTPRequestHandler):
         self._cors()
         self.end_headers()
 
+
+    def _static(self, full):
+        """Un archivo del front. Con CORS NO: mismo origen, no hace falta."""
+        ext = os.path.splitext(full)[1].lower()
+        try:
+            with open(full, "rb") as f:
+                data = f.read()
+        except OSError:
+            self._json(404, {"error": "not found"})
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", WEB_TYPES.get(ext, "application/octet-stream"))
+        # no-store a propósito: el binario se actualiza y una copia vieja en el cache
+        # del navegador es el bug más difícil de explicar que existe.
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _app_page(self):
+        """El index.html del front con el TOKEN inyectado.
+
+        Esto es lo que convierte a la web en "modo desktop": viene del mismo origen
+        que la API y ya trae la credencial, así que no hay botón Conectar ni prompt
+        de contraseña. El token se mete en un <script> antes que nada, para que el
+        bundle lo encuentre apenas arranca."""
+        base = web_dir()
+        try:
+            with open(os.path.join(base, "index.html"), "r", encoding="utf-8") as f:
+                html = f.read()
+        except OSError:
+            self._html(panel_ui.page(get_token()))
+            return
+        inject = ('<script>window.__DM_DESKTOP__=true;'
+                  'window.__DM_TOKEN__=%s;</script>' % json.dumps(get_token()))
+        if "<head>" in html:
+            html = html.replace("<head>", "<head>" + inject, 1)
+        else:
+            html = inject + html
+        self._html(html)
+
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
@@ -708,9 +802,17 @@ class Handler(BaseHTTPRequestHandler):
         # Panel de control (doc 18 §Panel): la página se sirve SIN auth porque ES
         # la que trae el token adentro; queda protegida por el loopback + la falta
         # de CORS (ver _html). Todo lo que hace después va con token, como la web.
+        if path in ("/", "/index.html") and web_dir():
+            self._app_page()
+            return
         if path in ("/", "/panel", "/index.html"):
             self._html(panel_ui.page(get_token()))
             return
+        if web_dir() and path.startswith("/"):
+            f = web_file(path.lstrip("/"))
+            if f:
+                self._static(f)
+                return
 
         if path == "/health":
             # /health es PÚBLICO (la web lo usa para detectar el server). No
