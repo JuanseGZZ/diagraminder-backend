@@ -28,8 +28,8 @@ import json
 import os
 import tempfile
 
-from antigravity import AntigravityAdapter
-from antigravity import map_model as agy_map_model
+from agy_cli import AntigravityAdapter
+from agy_cli import map_model as agy_map_model
 from claude import EFFORT_THINK, _self_cmd, find_claude
 from claude import map_model as claude_map_model
 from cli_base import _find_bin

@@ -14,7 +14,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from antigravity import AntigravityAdapter, handle_event   # noqa: E402
+from agy_cli import AntigravityAdapter, handle_event   # noqa: E402
 from clis import CLIS                                      # noqa: E402
 
 ok = fail = 0
