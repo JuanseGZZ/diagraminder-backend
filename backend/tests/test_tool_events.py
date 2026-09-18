@@ -11,7 +11,7 @@ REAL de `claude -p --output-format stream-json --verbose` (CLI 2.x) capturada a 
 Los fixtures de abajo son esas líneas, recortadas. Es la misma regla que se siguió con
 el contrato del puente de permisos (§66).
 
-    python3 diagramind-local/local-backend/tests/test_tool_events.py
+    python3 backend/tests/test_tool_events.py
 """
 import json
 import os

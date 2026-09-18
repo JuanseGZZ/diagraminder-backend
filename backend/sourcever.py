@@ -6,7 +6,7 @@ proyecto dentro de la carpeta de proyectos del conector
 se borran en cascada cuando el proyecto se elimina. Cada versión guarda FECHA y
 AUTOR (usuario o IA). Restaurar hace primero un snapshot de seguridad.
 
-Módulo de LÓGICA PURA compartido: existe idéntico en local-backend/ y en
+Módulo de LÓGICA PURA compartido: existe idéntico en backend/ y en
 external-backend/ (mismo criterio que editorfs.py ↔ fs.py). Si tocás uno,
 copiá el archivo al otro.
 

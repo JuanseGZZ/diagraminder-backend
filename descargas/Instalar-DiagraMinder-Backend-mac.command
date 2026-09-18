@@ -3,11 +3,11 @@
 # Descarga el binario, lo instala y lo hace arrancar solo al encender la Mac.
 set -e
 
-REL="https://github.com/JuanseGZZ/diagramind-local/releases/latest/download"
-BIN_URL="$REL/DiagraMind-Local-mac"
+REL="https://github.com/JuanseGZZ/diagraminder-backend/releases/latest/download"
+BIN_URL="$REL/DiagraMinder-Backend-mac"
 
 DIR="$HOME/Library/Application Support/DiagraMind"
-BIN="$DIR/DiagraMind-Local"
+BIN="$DIR/DiagraMinder-Backend"
 PLIST="$HOME/Library/LaunchAgents/com.diagramind.local.plist"
 
 echo "== Instalando DiagraMind Local =="

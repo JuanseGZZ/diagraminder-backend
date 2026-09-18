@@ -2,13 +2,13 @@
 
 Los binarios standalone (Windows / macOS / Linux) los compila **GitHub Actions**
 y los publica como **assets de un Release**. No se compilan ni se commitean a
-mano. El repo es `JuanseGZZ/diagramind-local` (público).
+mano. El repo es `JuanseGZZ/diagraminder-backend` (público).
 
 ## Sacar una versión nueva
 
 ```bash
 # Parado en la raíz del repo (externos/ en la máquina principal,
-# o el clone de diagramind-local en otra máquina):
+# o el clone de diagraminder-backend en otra máquina):
 git add -A
 git commit -m "backend: <lo que cambió>"
 git push
@@ -23,10 +23,10 @@ El workflow [.github/workflows/release.yml](../.github/workflows/release.yml):
    `ubuntu-latest` (Python 3.12).
 2. Genera el `.zip` (versión script) con `build_zip.sh`.
 3. Crea el Release del tag y adjunta como assets: los 3 binarios, los 3
-   instaladores, `instalar-win.ps1` y `diagramind-local.zip`.
+   instaladores, `instalar-win.ps1` y `diagraminder-backend.zip`.
 
 A los ~2 min, todo queda en:
-`https://github.com/JuanseGZZ/diagramind-local/releases/latest/download/<archivo>`
+`https://github.com/JuanseGZZ/diagraminder-backend/releases/latest/download/<archivo>`
 
 Esa URL `releases/latest/download/` siempre apunta al Release más nuevo, así que
 los instaladores y la web **no hay que tocarlos** al sacar versiones.
@@ -41,7 +41,7 @@ descargables, **sin** crear Release (solo los tags publican).
 
 ```bash
 pip install pyinstaller
-bash local-backend/build_binary.sh   # deja el binario del SO actual en descargas/ (gitignored)
+bash backend/build_binary.sh   # deja el binario del SO actual en descargas/ (gitignored)
 ```
 
 ## Notas

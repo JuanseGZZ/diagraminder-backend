@@ -1,19 +1,19 @@
 # DiagraMind Local — repo de los backends
 
-Este repo **público** (`JuanseGZZ/diagramind-local`) tiene las **dos** piezas que
+Este repo **público** (`JuanseGZZ/diagraminder-backend`) tiene las **dos** piezas que
 la app web necesita del lado de la máquina/servidor, cada una con su **versionado
 y su CI independientes**:
 
 | Pieza | Carpeta | Qué es | Versión en | Tag que compila |
 |---|---|---|---|---|
-| **Backend local** | `local-backend/` | el programita de escritorio (un usuario, su PC) | `server.py` → `VERSION` | `v*` (ej. `v0.33.1`) |
+| **Backend local** | `backend/` | el programita de escritorio (un usuario, su PC) | `server.py` → `VERSION` | `v*` (ej. `v0.33.1`) |
 | **Conector externo** | `external-backend/` | server multiusuario (carpetas, proyectos, WS en vivo, MCP) | `config.py` → `VERSION` | `connector-v*` (ej. `connector-v0.18.7`) |
 
 Los dos números **no** van juntos: el local puede ir en 0.32 y el conector en
 0.18. Cada tag dispara **su** workflow y publica **sus** binarios.
 
 > **Por qué separado.** La app web (repo `Diagramer`, privado) **ignora** esta
-> carpeta (`diagramind-local/` en su `.gitignore`): acá adentro hay otro `.git`
+> carpeta (`diagraminder-backend/` en su `.gitignore`): acá adentro hay otro `.git`
 > independiente — por eso los cambios de acá **no aparecen** en el `git status`
 > de Diagramer. El versionado del backend va **en este repo**, no en Diagramer.
 > Y tiene que ser **público** para que: (a) GitHub Actions compile gratis, y
@@ -22,11 +22,11 @@ Los dos números **no** van juntos: el local puede ir en 0.32 y el conector en
 ## Estructura
 
 ```
-.                                       ← raíz del repo (diagramind-local)
+.                                       ← raíz del repo (diagraminder-backend)
 ├── .github/workflows/
 │   ├── release.yml                     ← CI del LOCAL      (tags v*)
 │   └── release-connector.yml           ← CI del CONECTOR   (tags connector-v*)
-├── local-backend/
+├── backend/
 │   ├── server.py                       ← el backend local (acá vive su VERSION)
 │   ├── svgit.py, sourcever.py          ← ESPEJOS del conector (ver abajo)
 │   ├── launchers/                      ← lanzadores del modo script
@@ -36,8 +36,8 @@ Los dos números **no** van juntos: el local puede ir en 0.32 y el conector en
 │   ├── dashboard/                      ← panel del operador (estático)
 │   └── tests/                          ← se corren con su .venv (ver más abajo)
 └── descargas/
-    ├── Instalar-DiagraMind-<os>            ← instaladores del local
-    ├── Instalar-DiagraMind-Connector-<os>  ← instaladores del conector
+    ├── Instalar-DiagraMinder-Backend-<os>            ← instaladores del local
+    ├── Instalar-DiagraMinder-Connector-<os>  ← instaladores del conector
     └── instalar-win.ps1
 ```
 
@@ -47,28 +47,28 @@ Los dos números **no** van juntos: el local puede ir en 0.32 y el conector en
 > otro) y nadie lo notó hasta que un error salió sin traducir.
 
 Los **binarios no se commitean**: los genera el CI y viven en los
-[Releases](https://github.com/JuanseGZZ/diagramind-local/releases).
+[Releases](https://github.com/JuanseGZZ/diagraminder-backend/releases).
 
 ## Trabajar en otra máquina
 
 ```bash
-git clone https://github.com/JuanseGZZ/diagramind-local.git
-cd diagramind-local
+git clone https://github.com/JuanseGZZ/diagraminder-backend.git
+cd diagraminder-backend
 ```
 
 Eso es todo: este repo es autocontenido. (Dentro de Diagramer aparece como
-`diagramind-local/`, ignorada; podés laburar desde cualquiera de las dos.)
+`diagraminder-backend/`, ignorada; podés laburar desde cualquiera de las dos.)
 
 ## Ciclo de desarrollo
 
-1. **Editar** `local-backend/server.py`.
+1. **Editar** `backend/server.py`.
 2. **Probar local** (sin compilar nada):
    ```bash
-   python3 local-backend/server.py        # http://127.0.0.1:8765
+   python3 backend/server.py        # http://127.0.0.1:8765
    ```
    En la web → **IA → Conectar local**: si responde, estado *Conectado*.
 3. **Subir la versión**: en `server.py`, subí `VERSION = "0.1.x"` (la web la
-   muestra en *Conectado · diagramind-local vX*, así sabés que agarró la nueva).
+   muestra en *Conectado · diagraminder-backend vX*, así sabés que agarró la nueva).
 4. **Commit + push** del código:
    ```bash
    git add -A
@@ -114,10 +114,10 @@ cd external-backend
 
 1. Compila con PyInstaller en Windows, macOS y Linux (Python 3.12).
 2. Crea el Release `v0.1.1` y adjunta los 3 binarios + los 3 instaladores +
-   `instalar-win.ps1` + `diagramind-local.zip`.
+   `instalar-win.ps1` + `diagraminder-backend.zip`.
 
 A los ~3 min, todo queda en
-`https://github.com/JuanseGZZ/diagramind-local/releases/latest/download/<archivo>`.
+`https://github.com/JuanseGZZ/diagraminder-backend/releases/latest/download/<archivo>`.
 Esa URL apunta siempre al Release más nuevo, así que **la web y los instaladores
 no se tocan**: al sacar una versión nueva, empiezan a servir los binarios nuevos
 solos.
@@ -126,4 +126,4 @@ solos.
 > Para probar el build sin publicar: pestaña **Actions** → **Release** →
 > **Run workflow** (`workflow_dispatch`), que compila sin crear Release.
 
-Más detalle de compilación en [local-backend/COMPILAR.md](local-backend/COMPILAR.md).
+Más detalle de compilación en [backend/COMPILAR.md](backend/COMPILAR.md).

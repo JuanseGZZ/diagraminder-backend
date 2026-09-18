@@ -3,10 +3,10 @@
 # Descarga el binario, lo instala y lo hace arrancar solo al iniciar sesión.
 set -e
 
-REL="https://github.com/JuanseGZZ/diagramind-local/releases/latest/download"
-BIN_URL="$REL/DiagraMind-Local-linux"
+REL="https://github.com/JuanseGZZ/diagraminder-backend/releases/latest/download"
+BIN_URL="$REL/DiagraMinder-Backend-linux"
 
-BIN="$HOME/.local/bin/DiagraMind-Local"
+BIN="$HOME/.local/bin/DiagraMinder-Backend"
 
 echo "== Instalando DiagraMind Local =="
 mkdir -p "$HOME/.local/bin"
@@ -19,7 +19,7 @@ echo "Configurando auto-inicio..."
 if command -v systemctl >/dev/null 2>&1; then
   UNIT_DIR="$HOME/.config/systemd/user"
   mkdir -p "$UNIT_DIR"
-  cat > "$UNIT_DIR/diagramind-local.service" <<EOF
+  cat > "$UNIT_DIR/diagraminder-backend.service" <<EOF
 [Unit]
 Description=DiagraMind Local backend
 
@@ -31,12 +31,12 @@ Restart=on-failure
 WantedBy=default.target
 EOF
   systemctl --user daemon-reload
-  systemctl --user enable --now diagramind-local.service
+  systemctl --user enable --now diagraminder-backend.service
   echo "Auto-inicio configurado (systemd user)."
 else
   # Fallback: entrada de autostart del escritorio
   mkdir -p "$HOME/.config/autostart"
-  cat > "$HOME/.config/autostart/diagramind-local.desktop" <<EOF
+  cat > "$HOME/.config/autostart/diagraminder-backend.desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Name=DiagraMind Local

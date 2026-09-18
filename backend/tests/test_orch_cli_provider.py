@@ -16,7 +16,7 @@ Lo que este test cuida:
 
 No llama a ninguna API ni ejecuta ningún CLI: corre sin red.
 
-    python3 diagramind-local/local-backend/tests/test_orch_cli_provider.py
+    python3 backend/tests/test_orch_cli_provider.py
 """
 import os
 import sys

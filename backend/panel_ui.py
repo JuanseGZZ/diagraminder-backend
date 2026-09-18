@@ -240,7 +240,7 @@ pre.console {
     <h2>Servidor</h2>
     <div class="row">
       <div class="grow">
-        <div class="name" id="srv-name">diagramind-local</div>
+        <div class="name" id="srv-name">DiagraMinder</div>
         <div class="meta" id="srv-meta"></div>
       </div>
       <button class="danger" id="srv-stop" hidden>Detener</button>

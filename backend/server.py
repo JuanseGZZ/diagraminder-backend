@@ -68,13 +68,19 @@ DEFAULT_PORT = 8765
 # puerto REAL en el que quedó escuchando (lo fija main()): los agentes CLI confinados
 # del orquestador necesitan la URL propia para hablarle al MCP del editor.
 PORT = DEFAULT_PORT
-NAME = "diagramind-local"
+NAME = "DiagraMinder"
 VERSION = "0.33.7"   # el orquestador corre Claude Code y Antigravity, mezclados
 
 # ===================== rutas / disco =====================
 
 def app_dir():
-    """Carpeta de datos del backend, por SO."""
+    """Carpeta de datos del backend, por SO.
+
+    ⚠️ Se llama "DiagraMind" y NO se renombra. Acá adentro viven `projects/`,
+    `orchestrator/` y el token de todo el que ya usó la app: cambiar el nombre les
+    deja los proyectos huérfanos sin decirles nada. Es una MIGRACIÓN, no un rename,
+    y el beneficio —una carpeta más linda que casi nadie mira— no lo justifica.
+    El nombre visible sí cambió (NAME, arriba)."""
     home = os.path.expanduser("~")
     if sys.platform == "darwin":
         base = os.path.join(home, "Library", "Application Support", "DiagraMind")

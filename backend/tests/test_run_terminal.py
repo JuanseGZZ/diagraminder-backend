@@ -15,7 +15,7 @@ emitía DESPUÉS de ese loop, no se emitía nunca.
 Se prueba sin red (salvo loopback) y sin gastar tokens: un CLI de mentira que reproduce
 cada forma de dejar el turno sin final.
 
-    python3 diagramind-local/local-backend/tests/test_run_terminal.py
+    python3 backend/tests/test_run_terminal.py
 """
 import json
 import os

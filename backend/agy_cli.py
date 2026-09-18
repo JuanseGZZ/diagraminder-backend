@@ -4,7 +4,7 @@ Claude Code— que da streaming fino y memoria de conversación nativa.
 OJO CON EL NOMBRE: este archivo NO se puede llamar `antigravity.py`. La stdlib de
 Python trae un módulo con ese nombre exacto cuyo import **abre el navegador** en
 https://xkcd.com/353/ (es un easter egg oficial, con `webbrowser.open()` al tope del
-archivo). Mientras `local-backend/` esté primero en el `sys.path` gana el nuestro,
+archivo). Mientras `backend/` esté primero en el `sys.path` gana el nuestro,
 pero cualquier import desde otro cwd —un runner de tests, una herramienta, el propio
 binario congelado— se lleva el de la stdlib y le abre una pestaña al usuario sin que
 nadie entienda por qué. Se llama `agy_cli` por el binario que maneja: `agy`.

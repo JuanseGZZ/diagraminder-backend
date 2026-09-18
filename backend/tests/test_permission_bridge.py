@@ -10,7 +10,7 @@ del comando, la espera que bloquea hasta la respuesta, y la traducción al contr
 espera la CLI. El contrato (`{"behavior":"allow","updatedInput":…}`) se verificó a mano
 contra el CLI real 2.1.263 — ver el docstring de permission_mcp.py.
 
-    python3 diagramind-local/local-backend/tests/test_permission_bridge.py
+    python3 backend/tests/test_permission_bridge.py
 """
 import json
 import os

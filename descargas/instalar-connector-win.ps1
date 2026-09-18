@@ -1,11 +1,11 @@
 # Lógica de instalación del Conector externo DiagraMind (Windows).
-# La invoca Instalar-DiagraMind-Connector-win.bat. Resuelve el .exe del release más
+# La invoca Instalar-DiagraMinder-Connector-win.bat. Resuelve el .exe del release más
 # nuevo del conector (tag connector-v*, marcado prerelease → no se puede usar
 # releases/latest), lo instala y crea un acceso en la carpeta de Inicio para que
 # arranque solo al iniciar sesión.
 $ErrorActionPreference = "Stop"
 
-$api = "https://api.github.com/repos/JuanseGZZ/diagramind-local/releases"
+$api = "https://api.github.com/repos/JuanseGZZ/diagraminder-backend/releases"
 $rel = Invoke-RestMethod -Uri $api -Headers @{ "User-Agent" = "DiagraMind" }
 $r = $rel | Where-Object { $_.tag_name -like "connector-v*" } | Select-Object -First 1
 if (-not $r) { Write-Host "No se encontro ningun release del conector."; exit 1 }

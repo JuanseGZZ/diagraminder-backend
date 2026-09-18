@@ -1,11 +1,11 @@
 # Lógica de instalación de DiagraMind Local (Windows).
-# La invoca Instalar-DiagraMind-win.bat. Descarga el .exe, lo instala y
+# La invoca Instalar-DiagraMinder-Backend-win.bat. Descarga el .exe, lo instala y
 # crea un acceso en la carpeta de Inicio para que arranque solo al iniciar sesión.
 $ErrorActionPreference = "Stop"
 
-$url = "https://github.com/JuanseGZZ/diagramind-local/releases/latest/download/DiagraMind-Local-win.exe"
+$url = "https://github.com/JuanseGZZ/diagraminder-backend/releases/latest/download/DiagraMinder-Backend-win.exe"
 $dir = Join-Path $env:LOCALAPPDATA "DiagraMind"
-$bin = Join-Path $dir "DiagraMind-Local.exe"
+$bin = Join-Path $dir "DiagraMinder-Backend.exe"
 
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
 

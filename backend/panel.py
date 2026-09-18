@@ -318,7 +318,7 @@ def _github_asset_url(repo, asset):
     """URL del asset en el último release ESTABLE (los nightly no cuentan)."""
     req = urllib.request.Request(
         f"https://api.github.com/repos/{repo}/releases/latest",
-        headers={"User-Agent": "diagramind-local", "Accept": "application/vnd.github+json"})
+        headers={"User-Agent": "DiagraMinder", "Accept": "application/vnd.github+json"})
     with urllib.request.urlopen(req, timeout=30) as r:
         data = json.loads(r.read().decode("utf-8"))
     for a in data.get("assets", []):
@@ -329,7 +329,7 @@ def _github_asset_url(repo, asset):
 
 def _download(run, url, dest):
     """Descarga con progreso (los binarios son de decenas de MB)."""
-    req = urllib.request.Request(url, headers={"User-Agent": "diagramind-local"})
+    req = urllib.request.Request(url, headers={"User-Agent": "DiagraMinder"})
     with urllib.request.urlopen(req, timeout=60) as r, open(dest, "wb") as f:
         total = int(r.headers.get("Content-Length") or 0)
         got = last = 0

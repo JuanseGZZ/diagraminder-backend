@@ -16,7 +16,7 @@ La web (**IA → Descargar local**) ofrece, todas desde los **Releases** del rep
 
 1. **Ejecutable** (sin Python) — binario standalone (PyInstaller). Doble clic.
 2. **Instalador** — baja el ejecutable y lo deja arrancando solo (auto-inicio).
-3. **Script .py** — `diagramind-local.zip` con `server.py` + lanzadores; liviano
+3. **Script .py** — `diagraminder-backend.zip` con `server.py` + lanzadores; liviano
    pero requiere Python 3.
 
 ## Panel de control
@@ -62,7 +62,7 @@ Los binarios oficiales los hace el CI; ver [COMPILAR.md](COMPILAR.md).
 
 | Método | Ruta      | Respuesta |
 |--------|-----------|-----------|
-| GET    | `/health` | `{ "status": "ok", "name": "diagramind-local", "version": "0.33.7" }` |
+| GET    | `/health` | `{ "status": "ok", "name": "DiagraMinder", "version": "0.33.7" }` |
 
 ## Seguridad
 

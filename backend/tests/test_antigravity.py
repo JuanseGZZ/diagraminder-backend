@@ -7,7 +7,7 @@ vez (un esquema documentado de memoria que produjo proyectos vacíos en producci
 
 Este test NO llama a la API de Google: no gasta cuota y corre sin red.
 
-    python3 diagramind-local/local-backend/tests/test_antigravity.py
+    python3 backend/tests/test_antigravity.py
 """
 import os
 import sys
