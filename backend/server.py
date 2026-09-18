@@ -1755,6 +1755,31 @@ def main():
         editor_mcp.main()
         return
 
+    # MCP de los DIAGRAMAS (doc 37 §F18): lo lanza Claude Code —o cualquier cliente
+    # MCP— para leer y escribir los diagramas del usuario mientras codea.
+    if "--mcp-diagrams" in sys.argv:
+        import diagram_mcp
+        diagram_mcp.main()
+        return
+
+    # Imprime la config lista para pegar. Existe porque la alternativa es que la
+    # persona arme a mano un JSON con la ruta del binario y el token — y un token mal
+    # copiado falla con un error que no dice nada.
+    if "--mcp-config" in sys.argv:
+        exe = sys.executable if getattr(sys, "frozen", False) else None
+        cmd = [exe] if exe else [sys.executable, os.path.abspath(__file__)]
+        cfg = {"mcpServers": {"diagraminder": {
+            "command": cmd[0],
+            "args": cmd[1:] + ["--mcp-diagrams"],
+            "env": {"DMD_URL": f"http://{HOST}:{DEFAULT_PORT}", "DMD_TOKEN": get_token()},
+        }}}
+        print(json.dumps(cfg, indent=2, ensure_ascii=False))
+        print("\n# Pegalo en .mcp.json (en la raíz de tu proyecto) o corré:", file=sys.stderr)
+        print("#   claude mcp add-json diagraminder '<el objeto de adentro de mcpServers>'",
+              file=sys.stderr)
+        print("# Después, en Claude Code: /mcp para verlo conectado.", file=sys.stderr)
+        return
+
     # modo selector de carpeta: lo lanza pick_directory() como subproceso.
     if "--pick-dir" in sys.argv:
         i = sys.argv.index("--pick-dir")
