@@ -817,7 +817,14 @@ def resources_of(graph, node_id):
     for f in graph["flechas"]:
         if f.get("kind") == "usa" and int(f.get("fromId", -1)) == int(node_id):
             r = graph["nodos"].get(int(f["toId"]))
-            if r and r.get("type") == "agResource" and (r.get("data") or {}).get("projectId"):
+            if not r:
+                continue
+            d = r.get("data") or {}
+            # agResource = un PROYECTO de la carpeta; agFolder = una CARPETA REAL del
+            # disco (doc 37 §F3: reemplaza al viejo tipo de proyecto `editor`).
+            if r.get("type") == "agResource" and d.get("projectId"):
+                out.append(r)
+            elif r.get("type") == "agFolder" and d.get("path"):
                 out.append(r)
     return out
 
@@ -1229,24 +1236,55 @@ def control_tools(graph, node_id):
 PERM_LEVEL = {"leer": 0, "editar": 1, "ejecutar": 2}
 
 
+def _res_ref(ctx, r):
+    """Normaliza un nodo-recurso a {kind, key, name, type}, sea un PROYECTO de la
+    carpeta (agResource) o una CARPETA REAL del disco (agFolder).
+
+    `key` es lo que identifica el target en editorfs. Para una carpeta es
+    `<proyecto>#<nodo>` y no el id del nodo pelado: los ids son por árbol, así que
+    dos orquestadores tendrían un nodo 3 cada uno y se pisarían el target.
+    Devuelve None si el proyecto referenciado ya no existe."""
+    data = r.get("data") or {}
+    if r.get("type") == "agFolder":
+        return {"kind": "folder", "key": f"{ctx['pid']}#{r['id']}",
+                "name": r.get("titulo") or data.get("path") or "folder", "type": "folder"}
+    pid = data.get("projectId")
+    meta = ctx["project_meta"](pid)
+    if not meta:
+        return None
+    return {"kind": "project", "key": pid, "name": meta.get("name"), "type": meta.get("type")}
+
+
+def _res_is_files(ref):
+    """¿este recurso da herramientas de ARCHIVOS (y no de diagrama)?"""
+    return ref["kind"] == "folder"
+
+
+def _sv_dir(ctx, ref):
+    """Dónde vive el historial de versiones del recurso. El de un proyecto va DENTRO
+    del proyecto (viaja con él); el de una carpeta-nodo va en el directorio del
+    orquestador, que es de quien depende el nodo."""
+    if ref["kind"] == "folder":
+        return os.path.join(orch_dir(ctx["app_dir"], ctx["pid"]),
+                            "source-versions", ref["key"].split("#")[-1])
+    return ctx["sv_dir_of"](ref["key"])
+
+
 def resource_tools(ctx, graph, node_id, author):
     """(tools, executors, notas para el system) de los recursos `usa` del agente."""
     tools, execs, notes = [], {}, []
     for r in resources_of(graph, node_id):
         rid = f"r{r['id']}"
-        rpid = r["data"]["projectId"]
         perm = PERM_LEVEL.get((r["data"] or {}).get("permiso") or "editar", 1)
-        meta = ctx["project_meta"](rpid)          # {name, type} o None
-        if not meta:
+        ref = _res_ref(ctx, r)
+        if not ref:
             notes.append(f"- {rid}: (project deleted — do not use)")
             continue
-        rtype = meta.get("type")
-        label = f"{meta.get('name')} ({rtype}, permission {r['data'].get('permiso')})"
-        notes.append(f"- {rid}: {label}")
-        if rtype == "editor":
-            _editor_tools(ctx, rid, rpid, perm, tools, execs, author)
+        notes.append(f"- {rid}: {ref['name']} ({ref['type']}, permission {r['data'].get('permiso')})")
+        if _res_is_files(ref):
+            _editor_tools(ctx, rid, ref["key"], _sv_dir(ctx, ref), perm, tools, execs, author)
         else:
-            _diagram_tools(ctx, rid, rpid, rtype, perm, tools, execs)
+            _diagram_tools(ctx, rid, ref["key"], ref["type"], perm, tools, execs)
     return tools, execs, notes
 
 
@@ -1255,7 +1293,7 @@ def _fs(fn, *args):
     return json.dumps(payload, ensure_ascii=False), code >= 400
 
 
-def _editor_tools(ctx, rid, rpid, perm, tools, execs, author):
+def _editor_tools(ctx, rid, rpid, sv_dir, perm, tools, execs, author):
     app = ctx["app_dir"]
     def add(name, spec, fn):
         tools.append(dict(name=f"{rid}_{name}", **spec))
@@ -1268,7 +1306,7 @@ def _editor_tools(ctx, rid, rpid, perm, tools, execs, author):
     add("fs_grep", _s("Searches text across the files.", {"q": {"type": "string"}, "glob": {"type": "string"}}, ["q"]),
         lambda i: _fs(editorfs.fs_grep, app, rpid, i.get("q"), i.get("glob") or ""))
     def sv_ctx():
-        return ctx["sv_dir_of"](rpid), editorfs.get_target(app, rpid)
+        return sv_dir, editorfs.get_target(app, rpid)
     def sv_list(i):
         svd, _t = sv_ctx()
         return json.dumps(sourcever.sv_list(svd), ensure_ascii=False), False
@@ -1420,10 +1458,10 @@ def build_system(ctx, graph, node, notes):
 
     # OJO: la MEMORIA no va acá (ver mem_block): entra en el mensaje del turno para no
     # romper el prefijo cacheado en cada delegación.
-    tipos = {ctx["project_meta"](r["data"]["projectId"]).get("type")
-             for r in resources_of(graph, nid)
-             if ctx["project_meta"](r["data"].get("projectId"))}
-    for t in sorted(x for x in tipos if x and x != "editor"):
+    # solo los recursos DIAGRAMA tienen esquema; una carpeta no.
+    tipos = {ref["type"] for ref in (_res_ref(ctx, r) for r in resources_of(graph, nid))
+             if ref and not _res_is_files(ref)}
+    for t in sorted(x for x in tipos if x):
         body = _skill_body(t)
         if body:
             partes.append(f"SCHEMA of type {t} (for view/set_tree):\n{body[:3500]}")
@@ -1517,13 +1555,13 @@ def snapshot_resources(ctx, run, graph, node):
     for r in resources_of(graph, node["id"]):
         if PERM_LEVEL.get((r["data"] or {}).get("permiso") or "editar", 1) < 1:
             continue
-        rpid = r["data"]["projectId"]
-        meta = ctx["project_meta"](rpid)
-        if not meta:
+        ref = _res_ref(ctx, r)
+        if not ref:
             continue
+        rpid = ref["key"]
         try:
-            if meta.get("type") == "editor":
-                svd = ctx["sv_dir_of"](rpid)
+            if _res_is_files(ref):
+                svd = _sv_dir(ctx, ref)
                 target = editorfs.get_target(ctx["app_dir"], rpid)
                 if svd and target:
                     try:
@@ -1541,7 +1579,7 @@ def snapshot_resources(ctx, run, graph, node):
                     d = os.path.join(orch_dir(ctx["app_dir"], ctx["pid"]), "snapshots")
                     os.makedirs(d, exist_ok=True)
                     shutil.copyfile(src, os.path.join(d, f"{run['id']}-{node['id']}-{rpid}.json"))
-            emit(run, "log", nodeId=node["id"], text=f"pre-turn snapshot of {meta.get('name')}")
+            emit(run, "log", nodeId=node["id"], text=f"pre-turn snapshot of {ref['name']}")
         except Exception as e:
             emit(run, "log", nodeId=node["id"], text=f"snapshot failed ({meta.get('name')}): {e}")
 
@@ -2101,43 +2139,43 @@ def _cli_resource_notes(ctx, graph, node):
     confinado = bool((node.get("data") or {}).get("confinado"))
     notes, add_dirs, mcp, exec_ok = [], [], {}, False
     for r in resources_of(graph, node["id"]):
-        rpid = r["data"]["projectId"]
-        meta = ctx["project_meta"](rpid)
-        if not meta:
+        ref = _res_ref(ctx, r)
+        if not ref:
             continue
+        rpid = ref["key"]
         perm = (r["data"] or {}).get("permiso") or "editar"
         lvl = PERM_LEVEL.get(perm, 1)
         exec_ok = exec_ok or lvl >= 2
-        if meta.get("type") == "editor":
+        if _res_is_files(ref):
             target = editorfs.get_target(ctx["app_dir"], rpid)
             if not target:
-                notes.append(f"- «{meta.get('name')}» (editor): no folder configured — do not use")
+                notes.append(f"- «{ref['name']}» (folder): no folder configured — do not use")
                 continue
             if confinado:
                 name = f"dmfs{r['id']}"
                 mcp[name] = {"projectId": rpid, "perm": lvl}
                 tools = "read" if lvl < 1 else ("read/write/exec" if lvl >= 2 else "read/write")
-                notes.append(f"- «{meta.get('name')}» (editor, permission {perm}): use ONLY the "
+                notes.append(f"- «{ref['name']}» (folder, permission {perm}): use ONLY the "
                              f"`mcp__{name}__*` tools ({tools}). You do NOT have the folder mounted: don't "
                              "look for it on disk, everything goes through those tools.")
             elif lvl >= 1:
                 add_dirs.append(target)
-                notes.append(f"- «{meta.get('name')}» (editor, permission {perm}): the real folder "
+                notes.append(f"- «{ref['name']}» (folder, permission {perm}): the real folder "
                              f"{target} — work DIRECTLY there with your file tools")
             else:
-                notes.append(f"- «{meta.get('name')}» (editor, permission leer): it is NOT mounted "
+                notes.append(f"- «{ref['name']}» (folder, permission leer): it is NOT mounted "
                              "(native tools don't tell reading from writing apart). If you need to "
                              "read it, ask the human to switch it to confined mode.")
         else:
             # diagrama: es UN archivo dentro del mirror. Se monta su subdirectorio, no
             # la carpeta entera (en confinado también: no hay MCP de diagramas todavía).
-            sub = os.path.join(ctx.get("work_dir") or ctx["app_dir"], safe_name(meta.get("name") or rpid))
+            sub = os.path.join(ctx.get("work_dir") or ctx["app_dir"], safe_name(ref["name"] or rpid))
             if lvl >= 1:
                 add_dirs.append(sub)
             rel = os.path.join(sub, "tree.json")
-            notes.append(f"- «{meta.get('name')}» ({meta.get('type')}, permission {perm}): the diagram "
+            notes.append(f"- «{ref['name']}» ({ref['type']}, permission {perm}): the diagram "
                          f"{rel} — edit it respecting the EXACT schema of its type "
-                         f"(skill diagramind-{str(meta.get('type')).lower()})")
+                         f"(skill diagramind-{str(ref['type']).lower()})")
     # el organigrama propio de un DIRECTOR va acá y no en `notes`: no es un recurso
     # cableado (el bloque 👑 del system lo explica), pero SÍ tiene que estar montado.
     org = _cli_org_dir(ctx, node)
@@ -2147,11 +2185,11 @@ def _cli_resource_notes(ctx, graph, node):
 
 
 def _has_editor(ctx, graph, node_id):
-    """¿tiene algún recurso EDITOR cableado? Es el único lugar donde un agente puede
-    escribir archivos de código, así que sin uno hay que mandarlo a preguntar."""
+    """¿tiene alguna CARPETA cableada? Es el único lugar donde un agente puede
+    escribir archivos de código, así que sin una hay que mandarlo a preguntar."""
     for r in resources_of(graph, node_id):
-        meta = ctx["project_meta"]((r.get("data") or {}).get("projectId"))
-        if meta and meta.get("type") == "editor":
+        ref = _res_ref(ctx, r)
+        if ref and _res_is_files(ref):
             return True
     return False
 
@@ -3261,8 +3299,8 @@ def inspect_node(ctx, node_id):
     # como texto en el system (por eso un agente API sabe escribir un tree.json sin
     # tener una tool para eso). Van en refGroups para que no parezca que "le faltan
     # tools", sin ensuciar la lista de lo que el motor declara de verdad.
-    tipos = sorted({(ctx["project_meta"]((r["data"] or {}).get("projectId")) or {}).get("type")
-                    for r in resources_of(graph, node["id"])} - {None, "editor"})
+    tipos = sorted({ref["type"] for ref in (_res_ref(ctx, r) for r in resources_of(graph, node["id"]))
+                    if ref and not _res_is_files(ref)})
     refs = []
     if tipos:
         refs.append({"origin": "skills", "label": "Schemas injected into the system prompt",
