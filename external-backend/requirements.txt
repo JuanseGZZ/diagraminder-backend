@@ -1,6 +1,0 @@
-fastapi
-uvicorn
-PyJWT
-bcrypt
-python-multipart
-websockets
