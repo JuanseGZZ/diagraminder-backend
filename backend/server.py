@@ -46,7 +46,7 @@ import urllib.error
 import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
 # módulos desacoplados (ver claude.py / codex.py / gemini.py / cli_base.py / etc.)
 from util import safe_name, safe_file_name
@@ -69,7 +69,7 @@ DEFAULT_PORT = 8765
 # del orquestador necesitan la URL propia para hablarle al MCP del editor.
 PORT = DEFAULT_PORT
 NAME = "DiagraMinder"
-VERSION = "0.34.1"   # el binario ahora empaqueta certifi: sin eso todo HTTPS fallaba
+VERSION = "0.35.0"   # el MCP se prende/apaga, tres niveles, y sale por un túnel con OAuth
 
 # ===================== rutas / disco =====================
 
@@ -194,6 +194,19 @@ def projects_dir():
 # Qué puede hacer un cliente MCP: el interruptor y el nivel. Vive en config.json y se
 # lee en cada request a propósito — apagar el MCP tiene que apagarlo YA, no en el
 # próximo arranque, porque el cliente de afuera ya tiene la URL y el token.
+
+# El servidor OAuth del MCP remoto (doc 37 §F19). Una instancia por proceso: su
+# estado vive en memoria, así que reiniciar el backend revoca todo lo emitido.
+_OAUTH = None
+
+
+def oauth():
+    global _OAUTH
+    if _OAUTH is None:
+        import mcp_oauth
+        _OAUTH = mcp_oauth.OAuth()
+    return _OAUTH
+
 
 # El projectId reservado del MCP. No es un proyecto de verdad: es la forma de darle
 # al MCP una carpeta confinada sin duplicar editorfs.
@@ -798,13 +811,13 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def _html(self, body):
+    def _html(self, body, status=200):
         """La página del panel. A propósito SIN cabeceras CORS: lleva el token
         inyectado, y sin Access-Control-Allow-Origin el navegador no deja que otra
         web lea la respuesta. frame-ancestors/X-Frame-Options evitan que la metan en
         un iframe para robarle clics a los botones (detener, regenerar)."""
         data = body.encode("utf-8")
-        self.send_response(200)
+        self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Frame-Options", "DENY")
@@ -868,6 +881,147 @@ class Handler(BaseHTTPRequestHandler):
             html = inject + html
         self._html(html)
 
+    def _read_form(self):
+        """Body de un POST OAuth. La spec usa form-encoding; algunos clientes mandan
+        JSON igual, así que se aceptan los dos en vez de fallar con un 400 mudo."""
+        length = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(length).decode("utf-8", "replace") if length else ""
+        ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip()
+        if ctype == "application/json":
+            try:
+                return json.loads(raw or "{}")
+            except Exception:
+                return {}
+        return {k: v[0] for k, v in parse_qs(raw, keep_blank_values=True).items()}
+
+    def _oauth_pagina(self, q, cli_nombre, error=None, status=200):
+        """La pantalla de consentimiento, con el nivel que se está por conceder: hay
+        que decir QUÉ va a poder hacer el que entra, no solo pedir una contraseña."""
+        import mcp_oauth
+        pol = mcp_policy()
+        etiquetas = {"diagrams": "solo diagramas",
+                     "files": "diagramas + archivos",
+                     "shell": "diagramas + archivos + comandos"}
+        campos = {k: q.get(k, "") for k in
+                  ("client_id", "redirect_uri", "response_type", "code_challenge",
+                   "code_challenge_method", "state", "scope", "resource")}
+        self._html(mcp_oauth.consent_page(
+            self._origen(), cli_nombre, campos, error=error,
+            nivel=etiquetas.get(pol.get("mode"), pol.get("mode")),
+            carpeta=pol.get("root") or ""), status=status)
+
+    def _oauth_authorize_get(self, q):
+        fatal, ctx = oauth().leer_authz(q)
+        # Un client_id o un redirect_uri malos NO se pueden reportar redirigiendo:
+        # eso ES el agujero de open redirect. Se muestran acá.
+        if fatal:
+            self._text(400, f"Authorization error: {fatal}")
+            return
+        if ctx.get("oauth_error"):
+            self._oauth_redirect_error(q, ctx["oauth_error"])
+            return
+        self._oauth_pagina(q, ctx["client"]["client_name"])
+
+    def _oauth_authorize_post(self, q):
+        fatal, ctx = oauth().leer_authz(q)
+        if fatal:
+            self._text(400, f"Authorization error: {fatal}")
+            return
+        if ctx.get("oauth_error"):
+            self._oauth_redirect_error(q, ctx["oauth_error"])
+            return
+        code, err = oauth().aprobar(q, get_token(), self._origen())
+        if err:
+            self._oauth_pagina(q, ctx["client"]["client_name"], error=err, status=401)
+            return
+        destino = list(urlparse(q.get("redirect_uri")))
+        params = parse_qs(destino[4], keep_blank_values=True)
+        params["code"] = [code]
+        if q.get("state"):
+            params["state"] = [q["state"]]
+        params["iss"] = [self._origen()]            # RFC 9207
+        destino[4] = urlencode(params, doseq=True)
+        self._redirect(urlunparse(destino))
+
+    def _oauth_redirect_error(self, q, error):
+        destino = list(urlparse(q.get("redirect_uri")))
+        params = parse_qs(destino[4], keep_blank_values=True)
+        params["error"] = [error]
+        if q.get("state"):
+            params["state"] = [q["state"]]
+        params["iss"] = [self._origen()]
+        destino[4] = urlencode(params, doseq=True)
+        self._redirect(urlunparse(destino))
+
+    def _redirect(self, url):
+        self.send_response(302)
+        self.send_header("Location", url)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def _text(self, status, txt):
+        cuerpo = txt.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(cuerpo)))
+        self.end_headers()
+        self.wfile.write(cuerpo)
+
+    def _origen(self):
+        """El origen PÚBLICO de esta request. Detrás del túnel el Host y el
+        X-Forwarded-Proto son los de la URL de afuera, que es la que el cliente
+        OAuth tiene que ver en la metadata: si devolviéramos 127.0.0.1, el
+        redirect_uri y la audiencia no cerrarían nunca."""
+        proto = (self.headers.get("X-Forwarded-Proto") or "").split(",")[0].strip()
+        host = self.headers.get("Host") or f"127.0.0.1:{PORT}"
+        if not proto:
+            proto = "https" if not host.startswith("127.0.0.1") else "http"
+        return f"{proto}://{host}"
+
+    def _mcp_rpc(self, body):
+        """POST /mcp — el MCP por HTTP (Streamable HTTP, sin sesión: una request,
+        una respuesta). Mismo despacho que el stdio, a propósito: dos despachos se
+        habrían ido separando y el remoto habría quedado sin alguna guarda."""
+        import diagram_mcp
+        pol = mcp_policy()
+        if not pol.get("remote"):
+            self._json(403, {"jsonrpc": "2.0", "id": None, "error": {
+                "code": -32001,
+                "message": "remote MCP is off. The user must turn it on in DiagraMinder → Settings."}})
+            return
+        diagram_mcp.configurar(f"http://127.0.0.1:{PORT}", get_token())
+        # Un batch JSON-RPC es una lista; un mensaje suelto, un objeto.
+        if isinstance(body, list):
+            out = [r for r in (diagram_mcp.handle(m) for m in body) if r is not None]
+            self._json(200, out if out else [])
+            return
+        r = diagram_mcp.handle(body)
+        # Una notificación no lleva respuesta: 202 sin cuerpo es lo que espera la spec.
+        if r is None:
+            self.send_response(202)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        self._json(200, r)
+
+    def _mcp_auth_ok(self):
+        """¿Viene con un bearer válido? Si no, 401 con el WWW-Authenticate que le
+        dice al cliente DÓNDE está la metadata para arrancar el flujo OAuth."""
+        origen = self._origen()
+        ok, err, desc = oauth().verificar(self.headers.get("Authorization"),
+                                          get_token(), origen)
+        if ok:
+            return True
+        self.send_response(401)
+        self.send_header("WWW-Authenticate", oauth().challenge_header(origen, err, desc))
+        self.send_header("Content-Type", "application/json")
+        cuerpo = json.dumps({"jsonrpc": "2.0", "id": None, "error": {
+            "code": -32001, "message": desc or "Unauthorized"}}).encode()
+        self.send_header("Content-Length", str(len(cuerpo)))
+        self.end_headers()
+        self.wfile.write(cuerpo)
+        return False
+
     def _mcp_gate(self, path, pid):
         """¿Puede el MCP hacer esta operación de archivos? Se chequea EN EL SERVIDOR
         y por la red, no en el cliente: el que tiene el `.mcp.json` ya tiene la URL y
@@ -894,6 +1048,29 @@ class Handler(BaseHTTPRequestHandler):
         if path in ("/", "/index.html") and web_dir():
             self._app_page()
             return
+        # --- OAuth del MCP remoto (doc 37 §F19) ---------------------------------
+        # Estas rutas van SIN el token del backend a propósito: son justamente las
+        # que un cliente usa para averiguar CÓMO autenticarse. No entregan nada:
+        # la metadata es pública por spec, y /authorize pide la contraseña.
+        if path in ("/.well-known/oauth-protected-resource",
+                    "/.well-known/oauth-protected-resource/mcp"):
+            self._json(200, oauth().protected_resource(self._origen()))
+            return
+        if path in ("/.well-known/oauth-authorization-server",
+                    "/.well-known/oauth-authorization-server/mcp",
+                    "/.well-known/openid-configuration"):
+            self._json(200, oauth().as_metadata(self._origen()))
+            return
+        if path == "/oauth/authorize":
+            self._oauth_authorize_get({k: v[0] for k, v in q.items()})
+            return
+        if path == "/mcp":
+            # En modo sin sesión el GET no aplica. Se contesta 405 con sentido en
+            # vez de un 404 que haría pensar que el endpoint no existe.
+            self._json(405, {"jsonrpc": "2.0", "id": None, "error": {
+                "code": -32000, "message": "Method not allowed. Use POST."}})
+            return
+
         if path in ("/", "/panel", "/index.html"):
             self._html(panel_ui.page(get_token()))
             return
@@ -944,9 +1121,10 @@ class Handler(BaseHTTPRequestHandler):
         # --- qué puede hacer el MCP (doc 37 §F19) ---
         elif path == "/mcp/policy":
             import mcp_policy as _mp
+            import tunnel
             pol = mcp_policy()
             self._json(200, dict(pol, tools=list(_mp.herramientas(pol)),
-                                 levels=list(_mp.NIVELES)))
+                                 levels=list(_mp.NIVELES), tunnel=tunnel.estado()))
         # --- actualizaciones (doc 37 §F17) ---
         elif path == "/update/check":
             import updater
@@ -1066,6 +1244,25 @@ class Handler(BaseHTTPRequestHandler):
             # (se lo diste al sistema externo), no el token local de la web.
             self._orch_hook(path)
             return
+        # --- OAuth del MCP remoto (doc 37 §F19): sin token del backend ----------
+        if path == "/oauth/register":
+            self._json(*oauth().registrar(self._read_json()))
+            return
+        if path == "/oauth/authorize":
+            self._oauth_authorize_post(self._read_form())
+            return
+        if path == "/oauth/token":
+            self._json(*oauth().token(self._read_form()))
+            return
+        if path == "/mcp":
+            # El MCP remoto NO se autentica con el token del backend en la query:
+            # se autentica con el bearer del header (o la contraseña como bearer).
+            # Una URL termina en el log de cada proxy del túnel; un header, no.
+            if not self._mcp_auth_ok():
+                return
+            self._mcp_rpc(self._read_json())
+            return
+
         if not self._auth_ok():
             self._json(401, {"error": "unauthorized"})
             return
@@ -1088,6 +1285,8 @@ class Handler(BaseHTTPRequestHandler):
             self._config_root(self._read_json())
         elif path == "/mcp/policy":
             self._mcp_policy(self._read_json())
+        elif path == "/mcp/tunnel":
+            self._mcp_tunnel(self._read_json())
         # --- panel de control (doc 18) ---
         elif path == "/panel/install":
             self._panel_install(self._read_json())
@@ -1462,6 +1661,25 @@ class Handler(BaseHTTPRequestHandler):
         pol = set_mcp_policy(patch)
         self._json(200, dict(pol, tools=list(_mp.herramientas(pol)),
                              levels=list(_mp.NIVELES)))
+
+    def _mcp_tunnel(self, body):
+        """Prende o apaga el túnel. Nunca se prende solo: exponer tu máquina a
+        internet no puede ser un default, tiene que ser un acto."""
+        import tunnel
+        tunnel.set_puerto(PORT)
+        if body.get("on"):
+            # Un túnel abierto sin MCP remoto habilitado es una puerta a ningún lado;
+            # peor, es una puerta que el usuario cree cerrada. Se habilita junto.
+            set_mcp_policy({"remote": True})
+            ok, detalle = tunnel.abrir()
+            if not ok:
+                set_mcp_policy({"remote": False})
+                self._json(400, {"error": detalle, "tunnel": tunnel.estado()})
+                return
+        else:
+            tunnel.cerrar()
+            set_mcp_policy({"remote": False})
+        self._json(200, {"tunnel": tunnel.estado(), "policy": mcp_policy()})
 
     def _config_root(self, body):
         path = (body.get("path") or "").strip()
@@ -1870,6 +2088,15 @@ def _panel_gone():
         if PANELS:
             return                      # volvió (recarga): seguimos vivos
     print("Panel cerrado → apagando el backend local.")
+    # El túnel es un proceso HIJO: si nos vamos con os._exit sin bajarlo, cloudflared
+    # queda vivo y la URL pública sigue respondiendo con el backend muerto detrás.
+    # Una puerta abierta que nadie recuerda haber dejado es exactamente lo que este
+    # diseño quiere evitar.
+    try:
+        import tunnel
+        tunnel.cerrar()
+    except Exception:
+        pass
     os._exit(0)
 
 

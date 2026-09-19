@@ -63,6 +63,34 @@ Four tools: `list_diagrams`, `read_diagram`, `diagram_schema`, `write_diagram`.
 > The config contains your access token. Treat it like a password: whoever has it can
 > read and change your projects.
 
+### What the MCP is allowed to do
+
+It is a switch with three levels, in the control panel under **MCP**. It starts **on**
+and at the lowest one:
+
+| Level | What the agent gets |
+|---|---|
+| **Diagrams only** *(default)* | the four tools above |
+| **Diagrams + files** | also read, write, edit, search, version and git — **only inside a folder you pick** |
+| **Diagrams + files + commands** | also run commands |
+
+Asking for a file level without picking a folder does **not** open your whole disk: it
+falls back to diagrams. The check lives in the backend, not in the page — once the
+`.mcp.json` is pasted, the client already has the URL and the token, so a switch in the
+UI would not switch anything off.
+
+### Reaching it from Claude web
+
+Claude web runs on Anthropic's servers, so it cannot talk to `127.0.0.1`. The panel can
+open a **Cloudflare tunnel** that gives you a public address (`https://….trycloudflare.com/mcp`)
+to add as a custom connector; it authenticates with OAuth 2.1 and asks for this
+program's password once.
+
+It needs `cloudflared` installed — **this program will not download it for you**, and
+it never opens the tunnel on its own. While the tunnel is open, anyone with the address
+*and* the password reaches this machine at the level above. It dies when you turn it
+off or close the program.
+
 ---
 
 ## Options

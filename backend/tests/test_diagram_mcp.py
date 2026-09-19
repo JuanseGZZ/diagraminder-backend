@@ -262,6 +262,145 @@ try:
     check("…y el archivo no se creó", not os.path.exists(os.path.join(codigo, "x.txt")))
 
     mcp.cerrar()
+
+    print("\n### H. el MCP REMOTO: OAuth y HTTP (doc 37 §F19)")
+    import base64 as _b64, hashlib as _hh, urllib.parse as _up
+
+    def http(metodo, ruta, cuerpo=None, headers=None, form=False):
+        datos = None
+        h = dict(headers or {})
+        if cuerpo is not None:
+            if form:
+                datos = _up.urlencode(cuerpo).encode()
+                h["Content-Type"] = "application/x-www-form-urlencoded"
+            else:
+                datos = json.dumps(cuerpo).encode()
+                h["Content-Type"] = "application/json"
+        r = urllib.request.Request(base + ruta, data=datos, headers=h, method=metodo)
+        try:
+            with urllib.request.urlopen(r, timeout=10) as resp:
+                raw = resp.read().decode()
+                try:
+                    return resp.status, json.loads(raw or "{}"), dict(resp.headers)
+                except Exception:
+                    return resp.status, raw, dict(resp.headers)
+        except urllib.error.HTTPError as e:
+            raw = e.read().decode()
+            try:
+                return e.code, json.loads(raw or "{}"), dict(e.headers)
+            except Exception:
+                return e.code, raw, dict(e.headers)
+
+    # 1) discovery: sin token, porque es justo lo que se usa para saber cómo autenticarse
+    st, meta, _ = http("GET", "/.well-known/oauth-protected-resource")
+    check("la metadata del recurso se sirve SIN token", st == 200 and meta.get("resource", "").endswith("/mcp"),
+          f"{st} {meta}")
+    st, asm, _ = http("GET", "/.well-known/oauth-authorization-server")
+    check("la del servidor de autorización también", st == 200 and asm.get("token_endpoint", "").endswith("/oauth/token"))
+    check("y exige PKCE S256", asm.get("code_challenge_methods_supported") == ["S256"], str(asm.get("code_challenge_methods_supported")))
+
+    # 2) el MCP remoto arranca APAGADO: exponer la máquina no puede ser un default
+    st, r, h = http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "ping"},
+                    {"Authorization": "Bearer " + token})
+    check("con `remote` apagado, /mcp rechaza aunque el bearer sea válido", st == 403, f"{st} {r}")
+
+    urllib.request.urlopen(urllib.request.Request(
+        f"{base}/mcp/policy?token={token}", data=json.dumps({"remote": True}).encode(),
+        headers={"Content-Type": "application/json"}, method="POST"), timeout=10).read()
+
+    # 3) sin bearer → 401 y el WWW-Authenticate que dice dónde está la metadata
+    st, r, h = http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "ping"})
+    check("sin bearer, /mcp da 401", st == 401, str(st))
+    check("…y el 401 dice DÓNDE está la metadata (si no, el cliente no puede arrancar)",
+          "resource_metadata" in (h.get("WWW-Authenticate") or ""), h.get("WWW-Authenticate", ""))
+    st, r, _ = http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "ping"},
+                    {"Authorization": "Bearer no-es-el-token"})
+    check("un bearer inventado tampoco entra", st == 401, str(st))
+
+    # 4) el flujo OAuth entero, como lo haría Claude web
+    st, cli, _ = http("POST", "/oauth/register",
+                      {"redirect_uris": ["http://127.0.0.1:9/cb"], "client_name": "Claude test"})
+    check("el cliente se registra solo (no hay id que copiar a mano)", st == 201 and cli.get("client_id"), f"{st} {cli}")
+    verifier = "un-verifier-larguito-de-prueba-123456"
+    challenge = _b64.urlsafe_b64encode(_hh.sha256(verifier.encode()).digest()).decode().rstrip("=")
+    q = {"client_id": cli["client_id"], "redirect_uri": "http://127.0.0.1:9/cb",
+         "response_type": "code", "code_challenge": challenge, "code_challenge_method": "S256",
+         "state": "xyz"}
+    st, pagina, _ = http("GET", "/oauth/authorize?" + _up.urlencode(q))
+    check("la pantalla de consentimiento aparece", st == 200 and "passphrase" in str(pagina), str(st))
+    check("…y dice QUÉ va a poder hacer, no solo pide una clave",
+          "diagramas" in str(pagina).lower(), str(pagina)[:200])
+
+    st, cuerpo, _ = http("POST", "/oauth/authorize", dict(q, passphrase="incorrecta"), form=True)
+    check("con la contraseña equivocada no da código", st == 401, str(st))
+
+    # el redirect lleva el code: urlopen lo seguiría, así que se lee el Location a mano
+    import http.client as _hc
+    u = _up.urlparse(base)
+    conn = _hc.HTTPConnection(u.hostname, u.port, timeout=10)
+    conn.request("POST", "/oauth/authorize", _up.urlencode(dict(q, passphrase=token)),
+                 {"Content-Type": "application/x-www-form-urlencoded"})
+    resp = conn.getresponse()
+    loc = resp.getheader("Location") or ""
+    resp.read(); conn.close()
+    check("con la contraseña correcta redirige con el code", resp.status == 302 and "code=" in loc, f"{resp.status} {loc}")
+    check("y devuelve el state y el iss (RFC 9207)", "state=xyz" in loc and "iss=" in loc, loc)
+    code = _up.parse_qs(_up.urlparse(loc).query)["code"][0]
+
+    st, tok, _ = http("POST", "/oauth/token",
+                      {"grant_type": "authorization_code", "code": code,
+                       "client_id": cli["client_id"], "redirect_uri": "http://127.0.0.1:9/cb",
+                       "code_verifier": "el-verifier-equivocado"}, form=True)
+    check("un code_verifier que no corresponde NO canjea (PKCE)", st == 400, f"{st} {tok}")
+
+    conn = _hc.HTTPConnection(u.hostname, u.port, timeout=10)
+    conn.request("POST", "/oauth/authorize", _up.urlencode(dict(q, passphrase=token)),
+                 {"Content-Type": "application/x-www-form-urlencoded"})
+    resp = conn.getresponse(); loc = resp.getheader("Location") or ""; resp.read(); conn.close()
+    code = _up.parse_qs(_up.urlparse(loc).query)["code"][0]
+    st, tok, _ = http("POST", "/oauth/token",
+                      {"grant_type": "authorization_code", "code": code,
+                       "client_id": cli["client_id"], "redirect_uri": "http://127.0.0.1:9/cb",
+                       "code_verifier": verifier}, form=True)
+    check("con el verifier correcto sí emite un access token", st == 200 and tok.get("access_token"), f"{st} {tok}")
+    at = tok["access_token"]
+
+    st, tok2, _ = http("POST", "/oauth/token",
+                       {"grant_type": "authorization_code", "code": code,
+                        "client_id": cli["client_id"], "redirect_uri": "http://127.0.0.1:9/cb",
+                        "code_verifier": verifier}, form=True)
+    check("el code es de UN SOLO uso", st == 400, f"{st} {tok2}")
+
+    # 5) el MCP por HTTP, con el token recién emitido
+    st, r, _ = http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                                     "params": {"protocolVersion": "2024-11-05"}},
+                    {"Authorization": "Bearer " + at})
+    check("initialize por HTTP responde", st == 200 and
+          (r.get("result") or {}).get("serverInfo", {}).get("name") == "diagraminder", f"{st} {r}")
+    st, r, _ = http("POST", "/mcp", {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+                    {"Authorization": "Bearer " + at})
+    nombres = sorted(t["name"] for t in (r.get("result") or {}).get("tools", []))
+    check("tools/list por HTTP da las mismas tools que por stdio",
+          nombres == sorted(["diagram_schema", "list_diagrams", "read_diagram", "write_diagram"]), str(nombres))
+    st, r, _ = http("POST", "/mcp", {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                                     "params": {"name": "list_diagrams", "arguments": {}}},
+                    {"Authorization": "Bearer " + at})
+    texto = ((r.get("result") or {}).get("content") or [{}])[0].get("text", "")
+    check("y una tool de verdad corre por el túnel", st == 200 and "Mapa" in texto, texto[:140])
+
+    # 6) la MISMA política manda en el remoto: no hay una puerta de atrás
+    urllib.request.urlopen(urllib.request.Request(
+        f"{base}/mcp/policy?token={token}", data=json.dumps({"enabled": False}).encode(),
+        headers={"Content-Type": "application/json"}, method="POST"), timeout=10).read()
+    st, r, _ = http("POST", "/mcp", {"jsonrpc": "2.0", "id": 4, "method": "tools/list"},
+                    {"Authorization": "Bearer " + at})
+    check("apagar el MCP también vacía la lista del REMOTO",
+          (r.get("result") or {}).get("tools") == [], json.dumps(r)[:140])
+
+    # 7) un GET a /mcp no es 404: se explica
+    st, r, _ = http("GET", "/mcp")
+    check("GET /mcp contesta 405 con sentido, no 404", st == 405, str(st))
+
 finally:
     srv.terminate()
     try:

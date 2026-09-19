@@ -270,17 +270,76 @@ def _reply(mid, result=None, error=None):
     sys.stdout.flush()
 
 
-def main():
+def configurar(base, token):
+    """Apunta este módulo (y el de archivos) a un backend. Lo llaman los DOS
+    transportes: el stdio de `--mcp-diagrams` y el HTTP de `POST /mcp`."""
     global BASE, TOKEN
-    BASE = (os.environ.get("DMD_URL") or "http://127.0.0.1:8765").rstrip("/")
-    TOKEN = os.environ.get("DMD_TOKEN") or ""
-    if not TOKEN:
-        print("falta DMD_TOKEN (el token del backend; lo imprime `--mcp-config`)", file=sys.stderr)
-        sys.exit(2)
-    # Las tools de archivos van por editor_mcp contra ESTE backend: AUTH="local" es
+    BASE = (base or "http://127.0.0.1:8765").rstrip("/")
+    TOKEN = token or ""
+    # Las tools de archivos van por editor_mcp contra ESE backend: AUTH="local" es
     # el header X-DiagraMind-Token, y el projectId reservado es el que tiene como
     # target la carpeta que el usuario eligió (server.py → MCP_PID).
     _fs.BASE, _fs.TOKEN, _fs.AUTH, _fs.PROJECT = BASE, TOKEN, "local", "__mcp__"
+
+
+def handle(msg):
+    """Un mensaje JSON-RPC → su respuesta (dict), o None si no lleva respuesta.
+
+    Está separado del transporte a propósito: el mismo despacho atiende el stdio de
+    Claude Code y el POST /mcp del túnel (doc 37 §F19). Duplicarlo garantizaba que
+    los dos caminos se fueran separando: el remoto terminaría sin alguna guarda.
+    """
+    mid = msg.get("id")
+    method = msg.get("method") or ""
+    params = msg.get("params") or {}
+
+    if method.startswith("notifications/"):
+        return None                                    # las notificaciones no se responden
+    if method == "initialize":
+        return _ok(mid, {
+            "protocolVersion": params.get("protocolVersion") or "2024-11-05",
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": "diagraminder", "version": "1.0.0"},
+        })
+    if method == "ping":
+        return _ok(mid, {})
+    if method == "tools/list":
+        # La lista se arma con la política DEL MOMENTO, no con la del arranque: si
+        # el usuario apaga el MCP mientras el cliente está conectado, la próxima
+        # lista ya viene vacía. Y las tools que el nivel no habilita NO aparecen:
+        # que no existan se entiende solo; que existan y sean rechazadas, no.
+        return _ok(mid, {"tools": _tools_visibles()})
+    if method == "tools/call":
+        # Una excepción acá NO puede matar el server: el cliente perdería la sesión
+        # entera por una tool que falló. Se devuelve como error de la tool y sigue.
+        nombre = params.get("name") or ""
+        try:
+            pol = _policy()
+            if not _mp.permite(pol, nombre):
+                text, is_err = _mp.motivo(pol, nombre), True
+            elif nombre in _NOMBRES_FS:
+                text, is_err = _fs.call_tool(nombre, params.get("arguments") or {})
+            else:
+                text, is_err = call_tool(nombre, params.get("arguments") or {})
+        except Exception as e:
+            text, is_err = f"the tool failed: {type(e).__name__}: {e}", True
+        return _ok(mid, {"content": [{"type": "text", "text": text}], "isError": is_err})
+    if mid is not None:
+        return {"jsonrpc": "2.0", "id": mid,
+                "error": {"code": -32601, "message": f"method not found: {method}"}}
+    return None
+
+
+def _ok(mid, result):
+    return {"jsonrpc": "2.0", "id": mid, "result": result}
+
+
+def main():
+    token = os.environ.get("DMD_TOKEN") or ""
+    if not token:
+        print("falta DMD_TOKEN (el token del backend; lo imprime `--mcp-config`)", file=sys.stderr)
+        sys.exit(2)
+    configurar(os.environ.get("DMD_URL"), token)
 
     for line in sys.stdin:
         line = line.strip()
@@ -290,43 +349,10 @@ def main():
             msg = json.loads(line)
         except json.JSONDecodeError:
             continue
-        mid = msg.get("id")
-        method = msg.get("method") or ""
-        params = msg.get("params") or {}
-
-        if method.startswith("notifications/"):
-            continue                                   # las notificaciones no se responden
-        if method == "initialize":
-            _reply(mid, {
-                "protocolVersion": params.get("protocolVersion") or "2024-11-05",
-                "capabilities": {"tools": {}},
-                "serverInfo": {"name": "diagraminder", "version": "1.0.0"},
-            })
-        elif method == "ping":
-            _reply(mid, {})
-        elif method == "tools/list":
-            # La lista se arma con la política DEL MOMENTO, no con la del arranque: si
-            # el usuario apaga el MCP mientras el cliente está conectado, la próxima
-            # lista ya viene vacía. Y las tools que el nivel no habilita NO aparecen:
-            # que no existan se entiende solo; que existan y sean rechazadas, no.
-            _reply(mid, {"tools": _tools_visibles()})
-        elif method == "tools/call":
-            # Una excepción acá NO puede matar el server: el cliente perdería la sesión
-            # entera por una tool que falló. Se devuelve como error de la tool y sigue.
-            nombre = params.get("name") or ""
-            try:
-                pol = _policy()
-                if not _mp.permite(pol, nombre):
-                    text, is_err = _mp.motivo(pol, nombre), True
-                elif nombre in _NOMBRES_FS:
-                    text, is_err = _fs.call_tool(nombre, params.get("arguments") or {})
-                else:
-                    text, is_err = call_tool(nombre, params.get("arguments") or {})
-            except Exception as e:
-                text, is_err = f"the tool failed: {type(e).__name__}: {e}", True
-            _reply(mid, {"content": [{"type": "text", "text": text}], "isError": is_err})
-        elif mid is not None:
-            _reply(mid, error={"code": -32601, "message": f"method not found: {method}"})
+        r = handle(msg)
+        if r is not None:
+            sys.stdout.write(json.dumps(r, ensure_ascii=False) + "\n")
+            sys.stdout.flush()
 
 
 if __name__ == "__main__":
