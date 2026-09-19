@@ -96,6 +96,28 @@ def config_path():
     return os.path.join(app_dir(), "config.json")
 
 
+# ===================== versión de la APP =====================
+# La versión del BACKEND (VERSION, arriba) y la de la APP son dos cosas distintas: la
+# de la app la fija el tag del release y `release.sh` la graba en el payload. Sin esto
+# el binario reportaba la del backend y no había manera de compararla con lo publicado.
+# Devuelve None si no hay payload (modo desarrollo, o el backend solo).
+_APP_VER = False
+
+
+def app_version():
+    global _APP_VER
+    if _APP_VER is False:
+        _APP_VER = None
+        base = web_dir()
+        if base:
+            try:
+                with open(os.path.join(base, "app-version.json"), encoding="utf-8") as f:
+                    _APP_VER = (json.load(f).get("version") or "").strip() or None
+            except Exception:
+                pass
+    return _APP_VER
+
+
 # ===================== token de acceso (auth local) =====================
 # Aunque el server escucha SOLO en 127.0.0.1, el CORS es abierto: cualquier web
 # que abras en el navegador podría pegarle al backend. Un token random corta eso.
@@ -831,7 +853,7 @@ class Handler(BaseHTTPRequestHandler):
                              "version": a.version(b) if b else None, "resume": a.supports_resume})
             cb = find_claude()
             self._json(200, {
-                "status": "ok", "name": NAME, "version": VERSION,
+                "status": "ok", "name": NAME, "version": VERSION, "appVersion": app_version(),
                 "auth": True, "authOk": self._auth_ok(),
                 "clis": clis,
                 # compat: campo claude suelto (clientes viejos)
@@ -858,6 +880,11 @@ class Handler(BaseHTTPRequestHandler):
             self._folders_read(q.get("path", [None])[0])
         elif path == "/config":
             self._json(200, {"root": projects_dir(), "base": app_dir()})
+        # --- actualizaciones (doc 37 §F17) ---
+        elif path == "/update/check":
+            import updater
+            self._json(200, updater.check(app_version(),
+                                          forzar=q.get("force", ["0"])[0] == "1"))
         # --- panel de control (doc 18) ---
         elif path == "/panel/status":
             self._json(200, panel.status(
@@ -989,6 +1016,10 @@ class Handler(BaseHTTPRequestHandler):
             self._panel_shutdown()
         elif path == "/projects/manifest":
             self._manifest(self._read_json())
+        elif path == "/update/apply":
+            import updater
+            ok, msg = updater.apply(app_version())
+            self._json(200 if ok else 409, {"ok": ok, "message": msg})
         elif path == "/state/write":
             self._state_write(self._read_json())
         elif path == "/chat":
