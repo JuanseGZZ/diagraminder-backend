@@ -1,129 +1,114 @@
-# DiagraMind Local — repo de los backends
+# DiagraMinder — backend
 
-Este repo **público** (`JuanseGZZ/diagraminder-backend`) tiene las **dos** piezas que
-la app web necesita del lado de la máquina/servidor, cada una con su **versionado
-y su CI independientes**:
+The program that runs behind [DiagraMinder](https://diagraminder.com) on your own
+machine. It is what makes the AI part work:
 
-| Pieza | Carpeta | Qué es | Versión en | Tag que compila |
-|---|---|---|---|---|
-| **Backend local** | `backend/` | el programita de escritorio (un usuario, su PC) | `server.py` → `VERSION` | `v*` (ej. `v0.33.1`) |
-| **Conector externo** | `external-backend/` | server multiusuario (carpetas, proyectos, WS en vivo, MCP) | `config.py` → `VERSION` | `connector-v*` (ej. `connector-v0.18.7`) |
+- **Keeps your projects on disk** and mirrors them with the app, live.
+- **Runs the AI you already have installed** — Claude Code, Antigravity — so the
+  agents cost you nothing per token.
+- **Exposes your diagrams over MCP**, so Claude Code can read them before touching
+  your code and write back what it did.
 
-Los dos números **no** van juntos: el local puede ir en 0.32 y el conector en
-0.18. Cada tag dispara **su** workflow y publica **sus** binarios.
+Everything stays local. There is no account and nothing is sent anywhere.
 
-> **Por qué separado.** La app web (repo `Diagramer`, privado) **ignora** esta
-> carpeta (`diagraminder-backend/` en su `.gitignore`): acá adentro hay otro `.git`
-> independiente — por eso los cambios de acá **no aparecen** en el `git status`
-> de Diagramer. El versionado del backend va **en este repo**, no en Diagramer.
-> Y tiene que ser **público** para que: (a) GitHub Actions compile gratis, y
-> (b) los instaladores puedan bajar los binarios de los Releases.
+> **Just want the whole thing in one file?** The app and this backend are also
+> published together as a single executable:
+> **[diagraminder-app](https://github.com/JuanseGZZ/diagraminder-app)**. That is the
+> easy path. This repo is for running the backend **next to the website** — or for
+> reading the code before you run it, which is why it is public.
 
-## Estructura
+---
 
-```
-.                                       ← raíz del repo (diagraminder-backend)
-├── .github/workflows/
-│   ├── release.yml                     ← CI del LOCAL      (tags v*)
-│   └── release-connector.yml           ← CI del CONECTOR   (tags connector-v*)
-├── backend/
-│   ├── server.py                       ← el backend local (acá vive su VERSION)
-│   ├── svgit.py, sourcever.py          ← ESPEJOS del conector (ver abajo)
-│   ├── launchers/                      ← lanzadores del modo script
-│   └── build_zip.sh, build_binary.sh
-├── external-backend/
-│   ├── server.py, config.py            ← el conector (su VERSION está en config.py)
-│   ├── dashboard/                      ← panel del operador (estático)
-│   └── tests/                          ← se corren con su .venv (ver más abajo)
-└── descargas/
-    ├── Instalar-DiagraMinder-Backend-<os>            ← instaladores del local
-    ├── Instalar-DiagraMinder-Connector-<os>  ← instaladores del conector
-    └── instalar-win.ps1
-```
+## Run it
 
-> **Archivos espejados**: `svgit.py` y `sourcever.py` existen **idénticos** en las
-> dos carpetas (lógica pura, sin framework). Si tocás uno, **copiá el archivo al
-> otro** — ya divergieron una vez (mensajes en español en uno y en inglés en el
-> otro) y nadie lo notó hasta que un error salió sin traducir.
+### From source, with Python
 
-Los **binarios no se commitean**: los genera el CI y viven en los
-[Releases](https://github.com/JuanseGZZ/diagraminder-backend/releases).
-
-## Trabajar en otra máquina
+**No dependencies to install** — it is plain standard library.
 
 ```bash
 git clone https://github.com/JuanseGZZ/diagraminder-backend.git
 cd diagraminder-backend
+python3 backend/server.py
 ```
 
-Eso es todo: este repo es autocontenido. (Dentro de Diagramer aparece como
-`diagraminder-backend/`, ignorada; podés laburar desde cualquiera de las dos.)
+Then open **https://diagraminder.com** and, in **Settings**, click **Connect local**.
+The website will ask for a password the first time: that is the access token, printed
+on startup and stored in `token.txt` inside the data folder (the path is printed too).
 
-## Ciclo de desarrollo
+**Requirements:** Python 3.10 or newer. On Linux you may also need `python3-tk`
+(`sudo apt install python3-tk`) — it is what draws the "choose a folder" dialog.
 
-1. **Editar** `backend/server.py`.
-2. **Probar local** (sin compilar nada):
-   ```bash
-   python3 backend/server.py        # http://127.0.0.1:8765
-   ```
-   En la web → **IA → Conectar local**: si responde, estado *Conectado*.
-3. **Subir la versión**: en `server.py`, subí `VERSION = "0.1.x"` (la web la
-   muestra en *Conectado · diagraminder-backend vX*, así sabés que agarró la nueva).
-4. **Commit + push** del código:
-   ```bash
-   git add -A
-   git commit -m "backend: <qué cambió>"
-   git push
-   ```
-5. **Generar los exe nuevos** (dispara el build): pushear un **tag**.
-   ```bash
-   git tag v0.1.1            # backend LOCAL
-   git push origin v0.1.1
+### Or download a binary
 
-   git tag connector-v0.6.1  # CONECTOR externo
-   git push origin connector-v0.6.1
-   ```
+From **[Releases](../../releases/latest)**: `DiagraMinder-Backend-win.exe`,
+`DiagraMinder-Backend-mac`, `DiagraMinder-Backend-linux`. No Python needed.
 
-   > En PowerShell corré los comandos **en líneas separadas** (`&&` no anda).
-   >
-   > El tag tiene que coincidir con la `VERSION` del código de esa pieza: es lo
-   > que la web muestra en *Conectado · …* y lo único que permite saber qué
-   > binario está corriendo alguien.
+There are also installers (`Instalar-DiagraMinder-Backend-*`) that put it in place and
+start it with your session, and `diagraminder-backend.zip` with the plain scripts.
 
-## Tests del conector
+---
 
-Corren **sin docker ni cluster** (levantan servers reales con HOME temporal y
-puerto libre):
+## Connect Claude Code to your diagrams
 
 ```bash
-cd external-backend
-.venv/bin/python tests/test_project_acl.py      # 24 · permisos por proyecto
-.venv/bin/python tests/test_shared_types.py     # 15 · el compartido no aloja editor/orch
-.venv/bin/python tests/test_acl_live.py         # 11 · revoke en vivo por WS
-.venv/bin/python tests/test_editor_github.py    # 42 · versiones + GitHub del editor
-.venv/bin/python tests/test_presence.py         #  5 · presencia por persona, no por socket
-.venv/bin/python tests/pentest_connector.py     # 32 · ataques (JWT, IDOR, traversal, WS)
+python3 backend/server.py --mcp-config
 ```
 
-**Corrélos antes de taggear**: el tag publica binarios y un Release público.
+Paste the output into `.mcp.json` in your project. Claude Code can then read every
+diagram before touching your code, and write back what it did and what is left —
+you see the canvas change live. In Claude Code, `/mcp` shows it connected.
 
-## Qué pasa al pushear el tag
+Four tools: `list_diagrams`, `read_diagram`, `diagram_schema`, `write_diagram`.
 
-`git push origin v0.1.1` dispara
-[`.github/workflows/release.yml`](.github/workflows/release.yml):
+> The config contains your access token. Treat it like a password: whoever has it can
+> read and change your projects.
 
-1. Compila con PyInstaller en Windows, macOS y Linux (Python 3.12).
-2. Crea el Release `v0.1.1` y adjunta los 3 binarios + los 3 instaladores +
-   `instalar-win.ps1` + `diagraminder-backend.zip`.
+---
 
-A los ~3 min, todo queda en
-`https://github.com/JuanseGZZ/diagraminder-backend/releases/latest/download/<archivo>`.
-Esa URL apunta siempre al Release más nuevo, así que **la web y los instaladores
-no se tocan**: al sacar una versión nueva, empiezan a servir los binarios nuevos
-solos.
+## Options
 
-> Sin tag, un `git push` normal **no** compila nada. El build lo dispara el tag.
-> Para probar el build sin publicar: pestaña **Actions** → **Release** →
-> **Run workflow** (`workflow_dispatch`), que compila sin crear Release.
+| Flag | What it does |
+|---|---|
+| `--port N` | Listen on another port (default `8765`). |
+| `--no-ui` | Do not open the control panel window. |
+| `--mcp-config` | Print the MCP config, ready to paste. |
+| `--mcp-diagrams` | Run as an MCP server over stdio (what Claude Code launches). |
 
-Más detalle de compilación en [backend/COMPILAR.md](backend/COMPILAR.md).
+With a window open, **closing it stops the program**. With `--no-ui` it keeps running
+until you stop it.
+
+## Where your data lives
+
+| System | Folder |
+|---|---|
+| macOS | `~/Library/Application Support/DiagraMind` |
+| Windows | `%LOCALAPPDATA%\DiagraMind` |
+| Linux | `~/.local/share/DiagraMind` |
+
+Inside: `projects/` (your diagrams, as plain `tree.json` files you can read and back
+up), `orchestrator/` (agent state), `token.txt` and `log.txt`.
+
+It is outside the program on purpose — updating or reinstalling never touches it.
+
+## Security, in one paragraph
+
+The server listens **only on `127.0.0.1`**: nothing outside your machine can reach it.
+Every request needs the token, because any website you have open in the browser could
+otherwise talk to a local port. The agents' file access is confined to the folder you
+mount for them, checked on the server side by resolving the real path — not by
+trusting the client.
+
+---
+
+## Build a binary
+
+```bash
+python3 -m pip install pyinstaller certifi
+bash backend/build_binary.sh
+```
+
+`certifi` is not optional: without its certificate bundle inside, **every HTTPS call
+the binary makes fails** — including the update check.
+
+Releases are cut by pushing a `v*` tag; `.github/workflows/release.yml` builds the
+three systems and publishes them. The version lives in `backend/server.py` → `VERSION`.

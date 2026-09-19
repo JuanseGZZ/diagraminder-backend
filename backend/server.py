@@ -69,7 +69,7 @@ DEFAULT_PORT = 8765
 # del orquestador necesitan la URL propia para hablarle al MCP del editor.
 PORT = DEFAULT_PORT
 NAME = "DiagraMinder"
-VERSION = "0.34.0"   # MCP de diagramas, actualizaciones, y sirve la app web
+VERSION = "0.34.1"   # el binario ahora empaqueta certifi: sin eso todo HTTPS fallaba
 
 # ===================== rutas / disco =====================
 

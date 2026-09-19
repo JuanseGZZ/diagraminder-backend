@@ -18,17 +18,24 @@ jobs:
     strategy:
       matrix:
         include:
-          - { os: windows-latest, name: win,   ext: ".exe" }
-          - { os: macos-latest,   name: mac,   ext: "" }
-          - { os: ubuntu-latest,  name: linux, ext: "" }
+          - { os: windows-latest, name: win,   ext: ".exe", noconsole: "--noconsole" }
+          - { os: macos-latest,   name: mac,   ext: "",     noconsole: "" }
+          - { os: ubuntu-latest,  name: linux, ext: "",     noconsole: "" }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install pyinstaller
-      - run: pyinstaller --onefile --name DiagraMinder-Backend-${{ matrix.name }} backend/server.py
+      - run: pip install pyinstaller certifi
+      # --collect-data certifi: sin su cacert.pem adentro TODO HTTPS del binario falla
+      # (el `import certifi` vive en un try y PyInstaller no lo detecta solo).
+      # --noconsole en Windows: es una app, no un script.
+      - run: >
+          pyinstaller --onefile ${{ matrix.noconsole }}
+          --name DiagraMinder-Backend-${{ matrix.name }}
+          --hidden-import certifi --collect-data certifi
+          backend/server.py
       - uses: actions/upload-artifact@v4
         with:
           name: DiagraMinder-Backend-${{ matrix.name }}
