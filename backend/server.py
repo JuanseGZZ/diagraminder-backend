@@ -69,7 +69,7 @@ DEFAULT_PORT = 8765
 # del orquestador necesitan la URL propia para hablarle al MCP del editor.
 PORT = DEFAULT_PORT
 NAME = "DiagraMinder"
-VERSION = "0.33.7"   # el orquestador corre Claude Code y Antigravity, mezclados
+VERSION = "0.34.0"   # MCP de diagramas, actualizaciones, y sirve la app web
 
 # ===================== rutas / disco =====================
 
@@ -890,7 +890,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, panel.status(
                 name=NAME, version=VERSION, port=PORT, token=get_token(),
                 root=projects_dir(), base=app_dir(), token_file=token_path(),
-                auto_stop=AUTO_STOP))
+                auto_stop=AUTO_STOP, app_version=app_version()))
         elif path == "/panel/install/stream":
             self._stream(q.get("runId", [None])[0])   # mismo SSE de runs que el chat
         elif path == "/panel/alive":
@@ -1774,6 +1774,34 @@ def _instance_alive(port):
         return False
 
 
+def _log_a_archivo():
+    """Con la app empaquetada SIN consola (--windowed / --noconsole) no hay adónde
+    imprimir: stdout y stderr se pierden. Sin eso, cuando algo no anda no queda NADA
+    que mirar — ni un traceback. Se redirige a `log.txt` en la carpeta de datos, que
+    es lo que el panel «Este programa» te dice dónde está.
+
+    Solo cuando está congelado Y sin consola: corriendo desde la terminal, la terminal
+    ES el log y robársela sería peor. El archivo se trunca al arrancar para que no
+    crezca para siempre.
+
+    El test es `isatty()` y no "¿stdout existe?": lanzada desde Finder, la app
+    windowed SÍ tiene stdout — apunta a /dev/null. Chequear que exista daba siempre
+    "hay consola" y el log no se escribía nunca, que fue exactamente lo que pasó."""
+    if not getattr(sys, "frozen", False):
+        return
+    try:
+        if sys.stdout is not None and sys.stdout.isatty():
+            return                      # hay una terminal de verdad: no tocar nada
+    except Exception:
+        pass                            # sin stdout usable: justamente el caso windowed
+    try:
+        os.makedirs(app_dir(), exist_ok=True)
+        f = open(os.path.join(app_dir(), "log.txt"), "w", encoding="utf-8", buffering=1)
+        sys.stdout = sys.stderr = f
+    except Exception:
+        pass
+
+
 def main():
     # modo MCP (doc 27, fase 4): re-ejecución de este mismo binario/script como
     # MCP server stdio de fs para editores EXTERNOS (lo lanza Claude Code).
@@ -1810,6 +1838,10 @@ def main():
               file=sys.stderr)
         print("# Después, en Claude Code: /mcp para verlo conectado.", file=sys.stderr)
         return
+
+    # De acá para abajo somos el SERVER. Recién ahora se puede redirigir stdout: en
+    # los modos MCP de arriba stdout ES el protocolo JSON-RPC y tocarlo lo rompe.
+    _log_a_archivo()
 
     # modo selector de carpeta: lo lanza pick_directory() como subproceso.
     if "--pick-dir" in sys.argv:

@@ -52,8 +52,9 @@ def _ctx():
 
 
 def _nombre_asset():
+    # En mac el artefacto es un .app (un directorio) y viaja comprimido.
     if sys.platform == "darwin":
-        return "DiagraMinder-mac"
+        return "DiagraMinder-mac.zip"
     if os.name == "nt":
         return "DiagraMinder-win.exe"
     return "DiagraMinder-linux"
@@ -124,14 +125,24 @@ def apply(actual):
 
     destino = os.path.realpath(sys.executable)
     tmp = destino + ".nuevo"
+    bajado = tmp + (".zip" if info["url"].endswith(".zip") else "")
     try:
         with urllib.request.urlopen(urllib.request.Request(
                 info["url"], headers={"User-Agent": "DiagraMinder"}), timeout=300, context=_ctx()) as r, \
-                open(tmp, "wb") as f:
+                open(bajado, "wb") as f:
             shutil.copyfileobj(r, f)
+        if bajado != tmp:
+            # macOS: adentro del zip viene el .app. Se saca SOLO su ejecutable y se
+            # reemplaza el de adentro del bundle instalado: así el .app conserva su
+            # Info.plist, su icono y —sobre todo— los permisos que el usuario ya le dio.
+            nuevo = _sacar_del_zip(bajado, os.path.basename(destino))
+            _borrar(bajado)
+            if not nuevo:
+                return False, "el zip descargado no trae el ejecutable esperado"
+            os.replace(nuevo, tmp)
         os.chmod(tmp, os.stat(tmp).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     except Exception as e:
-        _borrar(tmp)
+        _borrar(tmp); _borrar(bajado)
         return False, f"falló la descarga: {e}"
 
     if not _probar(tmp):
@@ -155,6 +166,29 @@ def apply(actual):
         return False, f"no pude reemplazar el programa: {e}"
     _borrar(viejo)
     return True, f"actualizado a {info['latest']}. Cerrá y volvé a abrir DiagraMinder."
+
+
+def _sacar_del_zip(zip_path, nombre_exe):
+    """Extrae el ejecutable de adentro del .app comprimido. Devuelve la ruta al
+    archivo extraído, o None si no está."""
+    import zipfile
+    destino_dir = tempfile.mkdtemp(prefix="dmup-")
+    try:
+        with zipfile.ZipFile(zip_path) as z:
+            candidatos = [n for n in z.namelist()
+                          if n.endswith("/Contents/MacOS/" + nombre_exe)]
+            if not candidatos:
+                # el nombre pudo cambiar entre versiones: cualquier cosa bajo MacOS/
+                candidatos = [n for n in z.namelist()
+                              if "/Contents/MacOS/" in n and not n.endswith("/")]
+            if not candidatos:
+                return None
+            salida = os.path.join(destino_dir, "exe")
+            with z.open(candidatos[0]) as src, open(salida, "wb") as dst:
+                shutil.copyfileobj(src, dst)
+            return salida
+    except Exception:
+        return None
 
 
 def _borrar(p):

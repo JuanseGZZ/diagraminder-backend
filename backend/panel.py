@@ -171,11 +171,12 @@ def list_projects(root):
     return {"folders": folders, "count": count}
 
 
-def status(*, name, version, port, token, root, base, token_file, auto_stop):
+def status(*, name, version, port, token, root, base, token_file, auto_stop,
+           app_version=None):
     """Todo lo que muestra el panel, en una sola request (se repite cada 5s).
     `auto_stop`: si cerrar la ventana apaga el backend (arrancó CON panel)."""
     return {
-        "name": name, "version": version, "port": port,
+        "name": name, "version": version, "appVersion": app_version, "port": port,
         "url": f"http://127.0.0.1:{port}",
         "uptime": _uptime(),
         "token": token, "tokenPath": token_file,
@@ -391,7 +392,10 @@ def open_panel(url):
             continue
         try:
             subprocess.Popen(
-                [b, f"--app={url}", "--window-size=880,900", "--no-first-run",
+                # Ancha, no alta: adentro va la APP (un canvas), no el panel angosto
+                # de antes. Una ventana más alta que ancha deja el lienzo apretado.
+                [b, f"--app={url}", "--window-size=1340,860", "--window-position=60,40",
+                 "--no-first-run",
                  "--no-default-browser-check"],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 start_new_session=True,
