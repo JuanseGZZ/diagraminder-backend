@@ -41,13 +41,38 @@ def disponible():
     return shutil.which("cloudflared") or ""
 
 
+def comando_instalar():
+    """El comando concreto para ESTE sistema. Un link a una página de descargas hace
+    que la persona tenga que averiguar cuál de los seis archivos le toca; un comando
+    que se copia y se pega, no."""
+    import platform
+    so = platform.system()
+    if so == "Darwin":
+        return "brew install cloudflared"
+    if so == "Windows":
+        return "winget install --id Cloudflare.cloudflared"
+    return "sudo apt install cloudflared   # o el binario de la página de Cloudflare"
+
+
 def estado():
     d = dict(_estado)
-    d["installed"] = bool(disponible())
+    exe = disponible()
+    d["installed"] = bool(exe)
+    d["path"] = exe
     d["download"] = DESCARGA
+    d["install"] = comando_instalar()
+    d["version"] = _version(exe) if exe else ""
     if d["on"] and d["desde"]:
         d["uptime"] = int(time.time() - d["desde"])
     return d
+
+
+def _version(exe):
+    try:
+        out = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=6)
+        return (out.stdout or out.stderr or "").strip().splitlines()[0][:60]
+    except Exception:
+        return ""
 
 
 def _leer_salida(p):

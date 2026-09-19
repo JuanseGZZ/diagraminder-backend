@@ -263,6 +263,28 @@ try:
 
     mcp.cerrar()
 
+    print("\n### G2. la config que la UI muestra es la MISMA que imprime el flag")
+    cfg_http = json.loads(urllib.request.urlopen(f"{base}/mcp/config?token={token}").read())
+    srv_cfg = cfg_http.get("config", {}).get("mcpServers", {}).get("diagraminder", {})
+    check("/mcp/config devuelve un mcpServers armado", bool(srv_cfg), json.dumps(cfg_http)[:140])
+    check("…con la dirección REAL del backend (el puerto que está usando)",
+          srv_cfg.get("env", {}).get("DMD_URL") == base, srv_cfg.get("env", {}).get("DMD_URL"))
+    check("…y con el token, que es lo que no se puede adivinar",
+          srv_cfg.get("env", {}).get("DMD_TOKEN") == token)
+    # Y que el flag imprima lo mismo: si la pantalla y el comando divergen, alguien
+    # copia el que no anda y no hay forma de saber cuál era.
+    salida = subprocess.run([sys.executable, SERVER, "--port", str(port), "--mcp-config"],
+                            capture_output=True, text=True, env=env, timeout=30)
+    try:
+        cfg_flag = json.loads(salida.stdout)
+    except Exception:
+        cfg_flag = {}
+    check("`--mcp-config` imprime la MISMA forma que la UI",
+          list((cfg_flag.get("mcpServers") or {}).keys()) == ["diagraminder"], salida.stdout[:140])
+    check("…y con el mismo token",
+          (cfg_flag.get("mcpServers", {}).get("diagraminder", {})
+           .get("env", {}).get("DMD_TOKEN")) == token)
+
     print("\n### H. el MCP REMOTO: OAuth y HTTP (doc 37 §F19)")
     import base64 as _b64, hashlib as _hh, urllib.parse as _up
 

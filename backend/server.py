@@ -208,6 +208,19 @@ def oauth():
     return _OAUTH
 
 
+def mcp_config_json():
+    """El `.mcp.json` listo para pegar. Lo usan `--mcp-config` y la UI: tenerlo en UN
+    solo lugar evita que la pantalla muestre una cosa y el flag imprima otra —
+    justamente el tipo de diferencia que hace que alguien copie lo que no anda."""
+    exe = sys.executable if getattr(sys, "frozen", False) else None
+    cmd = [exe] if exe else [sys.executable, os.path.abspath(__file__)]
+    return {"mcpServers": {"diagraminder": {
+        "command": cmd[0],
+        "args": cmd[1:] + ["--mcp-diagrams"],
+        "env": {"DMD_URL": f"http://{HOST}:{PORT}", "DMD_TOKEN": get_token()},
+    }}}
+
+
 # El projectId reservado del MCP. No es un proyecto de verdad: es la forma de darle
 # al MCP una carpeta confinada sin duplicar editorfs.
 MCP_PID = "__mcp__"
@@ -1119,6 +1132,15 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/config":
             self._json(200, {"root": projects_dir(), "base": app_dir()})
         # --- qué puede hacer el MCP (doc 37 §F19) ---
+        elif path == "/mcp/config":
+            # Lo que hay que pegar en .mcp.json, servido para que la UI lo muestre
+            # tal cual y con un botón de copiar. Decirle a alguien "corré un comando
+            # y pegá lo que salga" cuando la app YA sabe la respuesta es hacerle
+            # hacer un trabajo que no le toca.
+            self._json(200, {"config": mcp_config_json(),
+                             "command": "DiagraMinder --mcp-config"
+                                        if getattr(sys, "frozen", False)
+                                        else f"python3 {os.path.abspath(__file__)} --mcp-config"})
         elif path == "/mcp/policy":
             import mcp_policy as _mp
             import tunnel
@@ -2160,13 +2182,7 @@ def main():
     # persona arme a mano un JSON con la ruta del binario y el token — y un token mal
     # copiado falla con un error que no dice nada.
     if "--mcp-config" in sys.argv:
-        exe = sys.executable if getattr(sys, "frozen", False) else None
-        cmd = [exe] if exe else [sys.executable, os.path.abspath(__file__)]
-        cfg = {"mcpServers": {"diagraminder": {
-            "command": cmd[0],
-            "args": cmd[1:] + ["--mcp-diagrams"],
-            "env": {"DMD_URL": f"http://{HOST}:{DEFAULT_PORT}", "DMD_TOKEN": get_token()},
-        }}}
+        cfg = mcp_config_json()
         print(json.dumps(cfg, indent=2, ensure_ascii=False))
         print("\n# Pegalo en .mcp.json (en la raíz de tu proyecto) o corré:", file=sys.stderr)
         print("#   claude mcp add-json diagraminder '<el objeto de adentro de mcpServers>'",

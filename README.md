@@ -50,11 +50,35 @@ start it with your session, and `diagraminder-backend.zip` with the plain script
 
 ## Connect Claude Code to your diagrams
 
+**Open the control panel** (the window this program opens, or `http://127.0.0.1:8765/panel`).
+Under **MCP** it shows the exact `.mcp.json` for your machine — address and password
+already filled in — with a button to copy it.
+
+Or, on the terminal:
+
 ```bash
 python3 backend/server.py --mcp-config
 ```
 
-Paste the output into `.mcp.json` in your project. Claude Code can then read every
+Either way you get this. `DMD_URL` is where Claude Code will talk to the program, and
+`DMD_TOKEN` is this program's password:
+
+```json
+{
+  "mcpServers": {
+    "diagraminder": {
+      "command": "/usr/bin/python3",
+      "args": ["/path/to/backend/server.py", "--mcp-diagrams"],
+      "env": {
+        "DMD_URL": "http://127.0.0.1:8765",
+        "DMD_TOKEN": "…this program's password…"
+      }
+    }
+  }
+}
+```
+
+Paste it into `.mcp.json` in the root of your project. Claude Code can then read every
 diagram before touching your code, and write back what it did and what is left —
 you see the canvas change live. In Claude Code, `/mcp` shows it connected.
 
@@ -86,8 +110,10 @@ open a **Cloudflare tunnel** that gives you a public address (`https://….trycl
 to add as a custom connector; it authenticates with OAuth 2.1 and asks for this
 program's password once.
 
-It needs `cloudflared` installed — **this program will not download it for you**, and
-it never opens the tunnel on its own. While the tunnel is open, anyone with the address
+The panel tells you whether you have `cloudflared` and the exact command to install
+it (`brew install cloudflared` on macOS, `winget install --id Cloudflare.cloudflared`
+on Windows). **This program will not download it for you**, and it never opens the
+tunnel on its own. While the tunnel is open, anyone with the address
 *and* the password reaches this machine at the level above. It dies when you turn it
 off or close the program.
 
