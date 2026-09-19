@@ -190,6 +190,46 @@ def projects_dir():
     return _ROOT
 
 
+# ===================== política del MCP (doc 37 §F19) =====================
+# Qué puede hacer un cliente MCP: el interruptor y el nivel. Vive en config.json y se
+# lee en cada request a propósito — apagar el MCP tiene que apagarlo YA, no en el
+# próximo arranque, porque el cliente de afuera ya tiene la URL y el token.
+
+# El projectId reservado del MCP. No es un proyecto de verdad: es la forma de darle
+# al MCP una carpeta confinada sin duplicar editorfs.
+MCP_PID = "__mcp__"
+
+
+def mcp_policy():
+    import mcp_policy as _mp
+    return _mp.normalizar(_load_config().get("mcp"))
+
+
+def set_mcp_policy(patch):
+    """Aplica un patch parcial y devuelve la política normalizada resultante."""
+    import mcp_policy as _mp
+    cfg = _load_config()
+    actual = dict(_mp.normalizar(cfg.get("mcp")))
+    for k in ("enabled", "mode", "root", "remote"):
+        if k in patch:
+            actual[k] = patch[k]
+    nueva = _mp.normalizar(actual)
+    # La carpeta del MCP se registra como target de un projectId RESERVADO. Así las
+    # tools de archivo pegan contra el MISMO /fs que ya usan los agentes confinados
+    # del orquestador, y heredan su confinamiento (realpath + prefijo, symlinks
+    # incluidos) en vez de estrenar uno nuevo que habría que volver a probar.
+    if nueva.get("root"):
+        try:
+            editorfs.set_target(app_dir(), MCP_PID, nueva["root"])
+        except Exception:
+            pass
+    cfg["mcp"] = nueva
+    os.makedirs(app_dir(), exist_ok=True)
+    with open(config_path(), "w", encoding="utf-8") as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
+    return nueva
+
+
 def set_root(path):
     global _ROOT
     _ROOT = path
@@ -730,6 +770,12 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
     def _read_json(self):
+        # El body se puede leer UNA sola vez del socket. El portero del MCP necesita
+        # mirarlo antes de rutear (el projectId viaja adentro), así que lo cachea acá
+        # y la ruta lo recibe igual que siempre.
+        cache = getattr(self, "_body_cache", None)
+        if cache is not None:
+            return cache
         length = int(self.headers.get("Content-Length") or 0)
         if not length:
             return {}
@@ -822,6 +868,21 @@ class Handler(BaseHTTPRequestHandler):
             html = inject + html
         self._html(html)
 
+    def _mcp_gate(self, path, pid):
+        """¿Puede el MCP hacer esta operación de archivos? Se chequea EN EL SERVIDOR
+        y por la red, no en el cliente: el que tiene el `.mcp.json` ya tiene la URL y
+        el token, así que un chequeo del lado del MCP no sería una regla (CLAUDE.md).
+        Devuelve un texto si hay que rechazar, o None si pasa."""
+        if pid != MCP_PID:
+            return None
+        import mcp_policy as _mp
+        pol = mcp_policy()
+        tool = "fs_exec" if path == "/fs/exec" else (
+            "fs_read" if path.startswith(("/fs/", "/sv/", "/svgit/")) else None)
+        if tool and not _mp.permite(pol, tool):
+            return _mp.motivo(pol, tool)
+        return None
+
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
@@ -880,6 +941,12 @@ class Handler(BaseHTTPRequestHandler):
             self._folders_read(q.get("path", [None])[0])
         elif path == "/config":
             self._json(200, {"root": projects_dir(), "base": app_dir()})
+        # --- qué puede hacer el MCP (doc 37 §F19) ---
+        elif path == "/mcp/policy":
+            import mcp_policy as _mp
+            pol = mcp_policy()
+            self._json(200, dict(pol, tools=list(_mp.herramientas(pol)),
+                                 levels=list(_mp.NIVELES)))
         # --- actualizaciones (doc 37 §F17) ---
         elif path == "/update/check":
             import updater
@@ -898,6 +965,9 @@ class Handler(BaseHTTPRequestHandler):
         # --- modo editor (doc 27; contrato unificado con el conector externo) ---
         elif path == "/editor/target":
             self._json(200, {"path": editorfs.get_target(app_dir(), q.get("projectId", [None])[0])})
+        elif path.startswith(("/fs/", "/sv/", "/svgit/")) and \
+                (_veto := self._mcp_gate(path, q.get("projectId", [None])[0])):
+            self._json(403, {"error": _veto})
         elif path == "/fs/tree":
             self._json(*editorfs.fs_tree(app_dir(), q.get("projectId", [None])[0], q.get("dir", [""])[0]))
         elif path == "/fs/read":
@@ -999,6 +1069,15 @@ class Handler(BaseHTTPRequestHandler):
         if not self._auth_ok():
             self._json(401, {"error": "unauthorized"})
             return
+        # Portero del MCP: cualquier operación de archivos sobre su projectId
+        # reservado pasa por la política ANTES de rutear, así una ruta nueva de la
+        # familia /fs no puede olvidarse de chequear.
+        if path.startswith(("/fs/", "/sv/", "/svgit/")):
+            self._body_cache = self._read_json()
+            veto = self._mcp_gate(path, self._body_cache.get("projectId"))
+            if veto:
+                self._json(403, {"error": veto})
+                return
         if path == "/projects/sync":
             self._sync(self._read_json())
         elif path == "/files/upload":
@@ -1007,6 +1086,8 @@ class Handler(BaseHTTPRequestHandler):
             self._folders_reveal(self._read_json())
         elif path == "/config/root":
             self._config_root(self._read_json())
+        elif path == "/mcp/policy":
+            self._mcp_policy(self._read_json())
         # --- panel de control (doc 18) ---
         elif path == "/panel/install":
             self._panel_install(self._read_json())
@@ -1355,6 +1436,33 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"treeJson": f.read()})
 
     # --- config (ruta raíz donde el conector guarda todas las carpetas) ---
+    def _mcp_policy(self, body):
+        """Cambia qué puede hacer el MCP. Solo acepta las claves conocidas: un patch
+        con basura no puede ampliar permisos por accidente."""
+        import mcp_policy as _mp
+        patch = {}
+        if "enabled" in body:
+            patch["enabled"] = bool(body.get("enabled"))
+        if "remote" in body:
+            patch["remote"] = bool(body.get("remote"))
+        if "mode" in body:
+            m = body.get("mode")
+            if m not in _mp.NIVELES:
+                self._json(400, {"error": f"mode inválido: {m!r} (son {', '.join(_mp.NIVELES)})"})
+                return
+            patch["mode"] = m
+        if "root" in body:
+            r = (body.get("root") or "").strip()
+            # Una raíz que no existe se rechaza acá: si se guardara, el modo caería a
+            # "diagrams" sin decir por qué y parecería que el switch no anda.
+            if r and not os.path.isdir(r):
+                self._json(400, {"error": f"esa carpeta no existe: {r}"})
+                return
+            patch["root"] = r
+        pol = set_mcp_policy(patch)
+        self._json(200, dict(pol, tools=list(_mp.herramientas(pol)),
+                             levels=list(_mp.NIVELES)))
+
     def _config_root(self, body):
         path = (body.get("path") or "").strip()
         if not path:

@@ -27,6 +27,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import editor_mcp as _fs
+import mcp_policy as _mp
+
 BASE = ""
 TOKEN = ""
 
@@ -211,6 +214,52 @@ def call_tool(name, args):
     return f"unknown tool: {name}", True
 
 
+# Las descripciones de editor_mcp hablan del "editor project" y del "connector":
+# los dos se borraron en F3/F8. Acá el contexto es OTRO —una carpeta que el usuario
+# eligió en Ajustes— así que se reescriben las que mentirían. Es la regla de las
+# skills: el modelo construye con lo que la descripción le contó que existe.
+_REDESCRIBIR = {
+    "fs_tree": ("Lists ONE level of the folder the user gave DiagraMinder's MCP "
+                "([{name, dir, size}], dirs first, capped at 500). Empty dir = that "
+                "folder's root; for subdirs pass their relative path."),
+    "fs_exec": ("Runs a shell command with cwd in the folder the user gave "
+                "DiagraMinder's MCP (60s timeout). Only available when the user set "
+                "the MCP level to 'shell'; a 403 means they did not — don't insist."),
+}
+
+
+def _tools_de_archivos():
+    fuera = []
+    for t in _fs.TOOLS:
+        t = dict(t)
+        if t["name"] in _REDESCRIBIR:
+            t["description"] = _REDESCRIBIR[t["name"]]
+        else:
+            t["description"] = t["description"].replace(
+                "the editor project", "the folder the user gave DiagraMinder's MCP")
+        fuera.append(t)
+    return fuera
+
+
+TOOLS = TOOLS + _tools_de_archivos()
+_NOMBRES_FS = {t["name"] for t in _fs.TOOLS}
+
+
+def _policy():
+    """La política vigente, preguntada al backend. Si el backend no contesta se cae al
+    nivel MÁS BAJO (solo diagramas) en vez de al más alto: ante la duda, menos permisos.
+    No se cachea — apagar el interruptor tiene que valer en la llamada siguiente."""
+    pol, err = _api("/mcp/policy")
+    if err or not isinstance(pol, dict):
+        return dict(_mp.DEFAULT)
+    return _mp.normalizar(pol)
+
+
+def _tools_visibles():
+    permitidas = set(_mp.herramientas(_policy()))
+    return [t for t in TOOLS if t["name"] in permitidas]
+
+
 def _reply(mid, result=None, error=None):
     msg = {"jsonrpc": "2.0", "id": mid}
     if error is not None:
@@ -228,6 +277,10 @@ def main():
     if not TOKEN:
         print("falta DMD_TOKEN (el token del backend; lo imprime `--mcp-config`)", file=sys.stderr)
         sys.exit(2)
+    # Las tools de archivos van por editor_mcp contra ESTE backend: AUTH="local" es
+    # el header X-DiagraMind-Token, y el projectId reservado es el que tiene como
+    # target la carpeta que el usuario eligió (server.py → MCP_PID).
+    _fs.BASE, _fs.TOKEN, _fs.AUTH, _fs.PROJECT = BASE, TOKEN, "local", "__mcp__"
 
     for line in sys.stdin:
         line = line.strip()
@@ -252,12 +305,23 @@ def main():
         elif method == "ping":
             _reply(mid, {})
         elif method == "tools/list":
-            _reply(mid, {"tools": TOOLS})
+            # La lista se arma con la política DEL MOMENTO, no con la del arranque: si
+            # el usuario apaga el MCP mientras el cliente está conectado, la próxima
+            # lista ya viene vacía. Y las tools que el nivel no habilita NO aparecen:
+            # que no existan se entiende solo; que existan y sean rechazadas, no.
+            _reply(mid, {"tools": _tools_visibles()})
         elif method == "tools/call":
             # Una excepción acá NO puede matar el server: el cliente perdería la sesión
             # entera por una tool que falló. Se devuelve como error de la tool y sigue.
+            nombre = params.get("name") or ""
             try:
-                text, is_err = call_tool(params.get("name") or "", params.get("arguments") or {})
+                pol = _policy()
+                if not _mp.permite(pol, nombre):
+                    text, is_err = _mp.motivo(pol, nombre), True
+                elif nombre in _NOMBRES_FS:
+                    text, is_err = _fs.call_tool(nombre, params.get("arguments") or {})
+                else:
+                    text, is_err = call_tool(nombre, params.get("arguments") or {})
             except Exception as e:
                 text, is_err = f"the tool failed: {type(e).__name__}: {e}", True
             _reply(mid, {"content": [{"type": "text", "text": text}], "isError": is_err})

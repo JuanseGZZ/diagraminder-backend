@@ -156,6 +156,111 @@ try:
     txt, err = mcp.tool("write_diagram", {"name": "Mapa"})
     check("sin `json` avisa qué falta", err and "json" in txt.lower(), txt[:120])
 
+    print("\n### F. el interruptor y los niveles (doc 37 §F19)")
+
+    def politica(**patch):
+        """POST /mcp/policy → la política resultante, leída del propio backend."""
+        req = urllib.request.Request(
+            f"{base}/mcp/policy?token={token}", data=json.dumps(patch).encode(),
+            headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return json.loads(r.read().decode())
+
+    def lista():
+        return sorted(t["name"] for t in (mcp.pedir("tools/list").get("result") or {}).get("tools", []))
+
+    pol = json.loads(urllib.request.urlopen(f"{base}/mcp/policy?token={token}").read())
+    check("por default está PRENDIDO y en diagramas (no rompe a quien ya lo usaba)",
+          pol["enabled"] is True and pol["mode"] == "diagrams", json.dumps(pol))
+
+    # Apagarlo tiene que valer EN VIVO: el cliente MCP ya está conectado y con token.
+    politica(enabled=False)
+    check("apagado, tools/list queda vacía sin reiniciar nada", lista() == [], str(lista()))
+    txt, err = mcp.tool("read_diagram", {"name": "Mapa"})
+    check("y una tool llamada igual se rechaza", err and "turned off" in txt, txt[:140])
+    check("el rechazo dice DÓNDE prenderlo", "Settings" in txt, txt[:140])
+
+    politica(enabled=True)
+    check("al prenderlo vuelven las 4 de diagramas", lista() == sorted(
+        ["diagram_schema", "list_diagrams", "read_diagram", "write_diagram"]), str(lista()))
+    txt, err = mcp.tool("read_diagram", {"name": "Mapa"})
+    check("…y vuelve a funcionar", not err, txt[:100])
+
+    # Subir de nivel SIN carpeta no puede abrir el disco entero.
+    pol = politica(mode="files")
+    check("pedir 'files' sin carpeta NO abre archivos: cae a diagramas",
+          pol["mode"] == "diagrams", json.dumps(pol))
+
+    try:
+        politica(root=os.path.join(home, "no-existe-esta-carpeta"))
+        check("una carpeta inexistente se rechaza", False, "no tiró 400")
+    except urllib.error.HTTPError as e:
+        check("una carpeta inexistente se rechaza con 400", e.code == 400, str(e.code))
+
+    codigo = os.path.join(home, "codigo")
+    os.makedirs(codigo, exist_ok=True)
+    pol = politica(mode="files", root=codigo)
+    check("con carpeta elegida, 'files' sí queda", pol["mode"] == "files", json.dumps(pol))
+    check("y aparecen las tools de archivos", "fs_read" in lista() and "fs_write" in lista(), str(lista()))
+    check("pero NO la de ejecutar comandos", "fs_exec" not in lista(), str(lista()))
+    txt, err = mcp.tool("fs_exec", {"cmd": "echo hola"})
+    check("llamar fs_exec en nivel 'files' se rechaza", err and "shell" in txt, txt[:160])
+
+    pol = politica(mode="shell")
+    check("en 'shell' sí aparece fs_exec", pol["mode"] == "shell" and "fs_exec" in lista(), str(lista()))
+    check("y las de diagramas siguen estando (los niveles son acumulativos)",
+          "write_diagram" in lista(), str(lista()))
+
+    # La política se PERSISTE: no vive solo en memoria del proceso.
+    cfg = json.load(open(os.path.join(os.path.dirname(root), "config.json"), encoding="utf-8"))
+    check("queda guardada en config.json", (cfg.get("mcp") or {}).get("mode") == "shell",
+          json.dumps(cfg.get("mcp")))
+
+    print("\n### G. las tools de archivos, de verdad y confinadas")
+    politica(mode="files", root=codigo)
+    with open(os.path.join(codigo, "hola.py"), "w", encoding="utf-8") as f:
+        f.write("print('uno')\n")
+
+    txt, err = mcp.tool("fs_tree", {})
+    check("fs_tree ve la carpeta elegida", not err and "hola.py" in txt, txt[:160])
+    txt, err = mcp.tool("fs_read", {"path": "hola.py"})
+    check("fs_read trae el contenido real", not err and "print('uno')" in txt, txt[:160])
+    txt, err = mcp.tool("fs_write", {"path": "sub/nuevo.txt", "content": "creado por el agente"})
+    check("fs_write crea el archivo (y los directorios del medio)", not err, txt[:160])
+    check("…y está en el DISCO, donde el usuario lo ve",
+          open(os.path.join(codigo, "sub", "nuevo.txt"), encoding="utf-8").read() == "creado por el agente")
+    txt, err = mcp.tool("fs_edit", {"path": "hola.py", "old": "uno", "new": "dos"})
+    check("fs_edit reemplaza el texto exacto", not err, txt[:160])
+    check("…y el archivo quedó cambiado",
+          "print('dos')" in open(os.path.join(codigo, "hola.py"), encoding="utf-8").read())
+    txt, err = mcp.tool("fs_grep", {"q": "dos"})
+    check("fs_grep encuentra dentro de la carpeta", not err and "hola.py" in txt, txt[:160])
+
+    # Lo que de verdad importa: que NO se pueda salir de la carpeta elegida.
+    afuera = os.path.join(home, "secreto.txt")
+    with open(afuera, "w", encoding="utf-8") as f:
+        f.write("esto NO lo puede leer el agente")
+    txt, err = mcp.tool("fs_read", {"path": "../secreto.txt"})
+    check("un `..` no saca al agente de la carpeta", err, txt[:160])
+    txt, err = mcp.tool("fs_read", {"path": afuera})
+    check("una ruta ABSOLUTA de afuera tampoco", err, txt[:160])
+    txt, err = mcp.tool("fs_write", {"path": "../colado.txt", "content": "x"})
+    check("y tampoco se puede ESCRIBIR afuera", err, txt[:160])
+    check("…nada se creó afuera", not os.path.exists(os.path.join(home, "colado.txt")))
+
+    # El portero es del SERVIDOR: se prueba por la RED, sin pasar por el MCP.
+    politica(mode="diagrams")
+    req = urllib.request.Request(
+        f"{base}/fs/write?token={token}",
+        data=json.dumps({"projectId": "__mcp__", "path": "x.txt", "content": "x"}).encode(),
+        headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        urllib.request.urlopen(req, timeout=10)
+        check("bajar el nivel bloquea /fs por la RED, no solo en el MCP", False, "dejó escribir")
+    except urllib.error.HTTPError as e:
+        check("bajar el nivel bloquea /fs por la RED, no solo en el MCP", e.code == 403, str(e.code))
+    check("…y el archivo no se creó", not os.path.exists(os.path.join(codigo, "x.txt")))
+
     mcp.cerrar()
 finally:
     srv.terminate()
