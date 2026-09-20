@@ -1848,10 +1848,21 @@ class Handler(BaseHTTPRequestHandler):
         watcher aún no consumió (la IA/Claude Code lo escribió hace <0.5s), NO se
         escribe: se emite ese cambio por SSE y se responde 409. Sin esto, la
         versión vieja de la web pisaba la de la IA y —peor— el mtime quedaba
-        marcado como visto, así que el cambio externo se perdía en silencio."""
+        marcado como visto, así que el cambio externo se perdía en silencio.
+
+        ⚠️ `origin` (bug 2026-09-19): marcar el mtime como visto es correcto SOLO si
+        quien escribe es la WEB — ella ya tiene el contenido, y emitirlo sería
+        devolverle su propio eco. El MCP usa este MISMO endpoint, así que heredaba
+        una supresión pensada para otro: escribía, el watcher quedaba mudo, la web
+        nunca se enteraba y al rato le pisaba encima su copia vieja. El agente veía
+        un 200 y el usuario no veía nada. Con `origin != "web"` el cambio se EMITE
+        por SSE, que es justamente lo que hace que el canvas se mueva solo."""
         folder = body.get("folder") or "Local"
         name = body.get("name") or body.get("id")
         tree_json = body.get("treeJson")
+        # Quién escribe. Por defecto "web" para no cambiarle el comportamiento a
+        # nadie que ya use este endpoint sin decirlo.
+        origin = (body.get("origin") or "web").strip().lower()
         if not name or tree_json is None:
             self._json(400, {"error": "faltan name/id o treeJson"})
             return
@@ -1885,11 +1896,16 @@ class Handler(BaseHTTPRequestHandler):
                 return
             with open(fp, "w", encoding="utf-8") as f:
                 f.write(text)
+            seq = (prev or {}).get("seq", 0)
+            if origin != "web":
+                # No lo escribió la web: hay que AVISARLE. Si no, este cambio no
+                # existe para ella y su próximo sync lo borra.
+                seq = _emit_state(folder, resolve_tree_id(folder, safe_name(name)), text)
             try:
-                STATE[key] = {"mtime": os.path.getmtime(fp), "seq": (prev or {}).get("seq", 0)}
+                STATE[key] = {"mtime": os.path.getmtime(fp), "seq": seq}
             except OSError:
                 pass
-        self._json(200, {"ok": True})
+        self._json(200, {"ok": True, "emitted": origin != "web"})
 
     def _chat(self, body):
         pid = body.get("projectId")

@@ -425,7 +425,11 @@ function renderTunel(pol) {
       'llega a esta máquina con el nivel de arriba.</div></div></label>' +
     (t.on && t.url ? '<div class="row"><div class="grow"><div class="name">Dirección pública</div>' +
       '<div class="meta mono">' + t.url + '/mcp</div></div>' +
-      '<button id="tun-copy">Copiar</button></div>' : '') +
+      // Los dos botones que hacen falta EN ESE MOMENTO: la dirección para pegar en
+      // Claude web, y la contraseña que te va a pedir a continuación. Tenerla acá
+      // evita ir a buscar token.txt en el medio del flujo.
+      '<button id="tun-copy">Copiar dirección</button>' +
+      '<button id="tun-copy-tok">Copiar contraseña</button></div>' : '') +
     (t.error ? '<div class="note info">' + t.error + '</div>' : '');
   $("tun-on").onchange = async (e) => {
     e.target.disabled = true;
@@ -586,6 +590,10 @@ document.addEventListener("click", async (ev) => {
       break;
     case "mcp-copy":
       try { await navigator.clipboard.writeText(MCPJSON); toast("Config copiada"); }
+      catch (e) { toast(e.message); }
+      break;
+    case "tun-copy-tok":
+      try { await navigator.clipboard.writeText(STATE.token); toast("Contraseña copiada"); }
       catch (e) { toast(e.message); }
       break;
     case "tun-copy":

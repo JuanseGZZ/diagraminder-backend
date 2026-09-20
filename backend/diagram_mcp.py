@@ -206,9 +206,21 @@ def call_tool(name, args):
         if previo and obj.get("type") != previo:
             return (f"this diagram is of type '{previo}' and your JSON says '{obj.get('type')}'. "
                     "Changing the type would break it — keep it as it was."), True
-        _, err = _api("/state/write", {"folder": folder, "name": nombre_real, "treeJson": obj})
+        # `origin` importa: sin él el backend marca el mtime como ya visto —la
+        # supresión de eco pensada para la web— y el cambio NO se emite por SSE.
+        # El agente veía un 200, el usuario no veía nada, y el siguiente sync de la
+        # web le pasaba por encima. Decir quién escribe es lo que hace que el
+        # canvas se mueva solo (bitácora 2026-09-19).
+        res, err = _api("/state/write", {"folder": folder, "name": nombre_real,
+                                         "treeJson": obj, "origin": "mcp"})
         if err:
             return err, True
+        # Y no se promete lo que no se verificó: si el backend NO lo emitió, la web
+        # no se enteró, y decir "ya lo ve en pantalla" sería mentirle al modelo.
+        if isinstance(res, dict) and not res.get("emitted"):
+            return (f"'{nombre_real}' was written to disk, but the app was NOT notified, "
+                    "so the user may not see it yet and an app-side save could overwrite "
+                    "it. Tell the user to reopen the diagram."), True
         return f"OK: '{nombre_real}' updated. The user can see it on screen already.", False
 
     return f"unknown tool: {name}", True

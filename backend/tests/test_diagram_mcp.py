@@ -261,6 +261,48 @@ try:
         check("bajar el nivel bloquea /fs por la RED, no solo en el MCP", e.code == 403, str(e.code))
     check("…y el archivo no se creó", not os.path.exists(os.path.join(codigo, "x.txt")))
 
+    print("\n### G1. lo que escribe el MCP LLEGA a la web (no solo al disco)")
+    # El bug que se comió el trabajo del agente: /state/write marcaba el mtime como
+    # "ya visto" —la supresión de eco pensada para la WEB, que ya tiene el
+    # contenido— así que el watcher quedaba mudo. El MCP escribía, el agente veía
+    # un 200, la web nunca se enteraba y al rato le pisaba encima su copia vieja.
+    import threading as _th
+    eventos = []
+
+    marca = "AGENTE-PASO-POR-ACA-" + str(int(time.time() * 1000))
+
+    def _escuchar():
+        # Se escucha desde 0 (el stream replica el log) pero se espera LA MARCA de
+        # esta escritura: conformarse con el primer evento haría pasar el test con
+        # uno viejo, que es justo el error que este test existe para no cometer.
+        try:
+            with urllib.request.urlopen(
+                    f"{base}/state/stream?since=0&token={token}", timeout=12) as r:
+                for linea in r:
+                    linea = linea.decode().strip()
+                    if linea.startswith("data:"):
+                        try:
+                            eventos.append(json.loads(linea[5:].strip()))
+                        except Exception:
+                            pass
+                        if any(marca in json.dumps(e) for e in eventos):
+                            return
+        except Exception:
+            pass
+
+    h = _th.Thread(target=_escuchar, daemon=True)
+    h.start()
+    time.sleep(0.8)                                   # que el stream esté abierto
+    txt, err = mcp.tool("write_diagram", {"name": "Mapa",
+                                          "json": json.dumps({"type": "cart", "marca": marca})})
+    check("write_diagram responde OK", not err, txt[:160])
+    h.join(timeout=8)
+    check("el cambio del MCP se EMITE por SSE (si no, la web no se entera y lo pisa)",
+          any(marca in json.dumps(e) for e in eventos),
+          f"{len(eventos)} eventos: " + json.dumps(eventos)[:200])
+    check("…y el texto que recibe el modelo no promete de más",
+          "on screen" in txt, txt[:160])
+
     mcp.cerrar()
 
     print("\n### G2. la config que la UI muestra es la MISMA que imprime el flag")
