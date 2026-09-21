@@ -5,6 +5,7 @@
 # Los targets se persisten en <app_dir>/editor_targets.json.
 # Cada operación devuelve (status_code, payload) para que server.py haga _json().
 
+import procs
 import fnmatch
 import json
 import os
@@ -229,7 +230,7 @@ def fs_exec(app_dir, pid, cmd):
     if not cmd:
         return 400, {"error": "falta cmd"}
     try:
-        r = subprocess.run(cmd, shell=True, cwd=base, capture_output=True,
+        r = procs.run(cmd, shell=True, cwd=base, capture_output=True,
                            text=True, timeout=EXEC_TIMEOUT)
     except subprocess.TimeoutExpired:
         return 200, {"code": -1, "stdout": "", "stderr": "timeout (%ss)" % EXEC_TIMEOUT}

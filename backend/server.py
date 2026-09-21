@@ -1097,19 +1097,26 @@ class Handler(BaseHTTPRequestHandler):
             # /health es PÚBLICO (la web lo usa para detectar el server). No
             # devuelve el token; solo dice que se requiere y si el que mandaron
             # (si mandaron alguno) es válido.
-            clis = []
-            for a in CLIS.values():
-                b = a.find()
-                clis.append({"key": a.key, "label": a.label, "available": bool(b),
-                             "version": a.version(b) if b else None, "resume": a.supports_resume})
-            cb = find_claude()
+            # ⚠️ NO se detectan los CLIs acá. Esto es un chequeo de VIDA y la web lo
+            # llama cada 5s (el latido de localBackend.js): probar cada CLI cuesta un
+            # subproceso, y en Windows cada subproceso ABRE UNA CONSOLA. Con la
+            # detección adentro, /health hacía parpadear la consola sin parar y
+            # tardaba más que el timeout del latido — la app nunca terminaba de
+            # conectarse (2026-09-21). `clis_rapido()` devuelve lo que ya se sabe y
+            # refresca en otro hilo.
+            clis = [{k: c[k] for k in ("key", "label", "available", "version", "resume")}
+                    for c in panel.clis_rapido()]
+            # El campo `claude` suelto es compat de clientes viejos, y también salía
+            # de un subproceso (find_claude + claude_version). Sale de la MISMA lista
+            # cacheada: un chequeo de vida no puede lanzar procesos.
+            cl = next((c for c in clis if c.get("key") == "claude"), None)
             self._json(200, {
                 "status": "ok", "name": NAME, "version": VERSION, "appVersion": app_version(),
                 "auth": True, "authOk": self._auth_ok(),
                 "clis": clis,
                 # compat: campo claude suelto (clientes viejos)
-                "claude": {"available": bool(cb),
-                           "version": claude_version(cb) if cb else None},
+                "claude": {"available": bool(cl and cl.get("available")),
+                           "version": (cl or {}).get("version")},
             })
             return
 

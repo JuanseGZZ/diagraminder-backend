@@ -36,6 +36,7 @@
 El server (server.py) provee el contexto de rutas: dónde está el tree.json del
 orquestador y cómo resolver los de los proyectos-recurso (mirror de la carpeta).
 """
+import procs
 import hmac
 import json
 import os
@@ -2426,7 +2427,7 @@ def _run_cli_turn(ctx, graph, run, node, frame, message):
                              f"`{cli.bin_names[0]}` binary is not on this machine")
     cmd, cwd, cfg = _cli_cmd(ctx, graph, node, frame, message, cli_bin, cli)
     try:
-        proc = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        proc = procs.popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 text=True, bufsize=1, encoding="utf-8", errors="replace")
     except Exception as e:
         _rm(cfg)

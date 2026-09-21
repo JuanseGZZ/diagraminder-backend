@@ -14,6 +14,7 @@ propio repo remoto y manejarlo desde el panel Source Control (y la IA por tools)
 Módulo de LÓGICA PURA espejado local ↔ externo (como sourcever.py): si tocás uno,
 copiá el archivo al otro. Errores → GitError(code, msg).
 """
+import procs
 import os
 import subprocess
 from urllib.parse import urlparse, urlunparse
@@ -50,7 +51,7 @@ def _git(args, cwd, token=None, timeout=None):
     """Corre git y devuelve (code, salida redactada). GitError 400 si no hay git."""
     env = {**os.environ, **_NO_PROMPT_ENV}
     try:
-        r = subprocess.run(["git", *args], cwd=cwd, capture_output=True,
+        r = procs.run(["git", *args], cwd=cwd, capture_output=True,
                            text=True, timeout=timeout or GIT_TIMEOUT, check=False,
                            env=env)
     except FileNotFoundError:

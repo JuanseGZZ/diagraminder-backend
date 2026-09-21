@@ -1,5 +1,6 @@
 """Adaptador del CLI Claude Code. Único que da streaming fino (stream-json:
 assistant/tool/result) y memoria de conversación nativa (--resume <sessionId>)."""
+import procs
 import json
 import os
 import subprocess
@@ -52,7 +53,7 @@ def find_claude():
 
 def claude_version(claude_bin):
     try:
-        out = subprocess.run([claude_bin, "--version"], capture_output=True,
+        out = procs.run([claude_bin, "--version"], capture_output=True,
                              text=True, timeout=8)
         return (out.stdout or out.stderr).strip() or None
     except Exception:

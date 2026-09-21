@@ -16,6 +16,7 @@ Qué NO hace, a propósito:
     devuelve la URL y que la persona lo baje — decirle "listo" y no haber hecho nada
     sería peor.
 """
+import procs
 import json
 import os
 import shutil
@@ -104,7 +105,7 @@ def _probar(ruta):
     que es el fallo de verdad. `--mcp-config` sirve de humo: no abre puertos ni
     ventanas, imprime y sale."""
     try:
-        p = subprocess.run([ruta, "--mcp-config"], capture_output=True, timeout=45)
+        p = procs.run([ruta, "--mcp-config"], capture_output=True, timeout=45)
         return p.returncode == 0 and b"mcpServers" in p.stdout
     except Exception:
         return False

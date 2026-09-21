@@ -19,6 +19,7 @@ Lo que NO hace, a propósito:
 La autenticación de lo que entra por el túnel NO vive acá: la hace `mcp_oauth`. El
 túnel es un caño; el portero está del otro lado.
 """
+import procs
 import os
 import re
 import shutil
@@ -69,7 +70,7 @@ def estado():
 
 def _version(exe):
     try:
-        out = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=6)
+        out = procs.run([exe, "--version"], capture_output=True, text=True, timeout=6)
         return (out.stdout or out.stderr or "").strip().splitlines()[0][:60]
     except Exception:
         return ""
@@ -103,7 +104,7 @@ def abrir(timeout=25):
             return False, _estado["error"]
         _estado.update(on=False, url="", error="", desde=0)
         try:
-            _proc = subprocess.Popen(
+            _proc = procs.popen(
                 [exe, "tunnel", "--no-autoupdate", "--url", f"http://127.0.0.1:{_puerto()}"],
                 stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, bufsize=1)
         except Exception as e:

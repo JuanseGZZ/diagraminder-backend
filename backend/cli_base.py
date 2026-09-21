@@ -3,6 +3,7 @@
 - run_cli(): el NÚCLEO reusado (Popen + loop de stdout + máquina de estados +
   cancelación + estado terminal). Cada adaptador (claude/codex/gemini) aporta lo
   propio (build_cmd / parse_line / finalize / install_instructions / find / ...)."""
+import procs
 import glob
 import os
 import shutil
@@ -114,7 +115,7 @@ def _extra_bin_dirs():
     npm = shutil.which("npm") or shutil.which("npm.cmd")
     if npm:
         try:
-            out = subprocess.run([npm, "prefix", "-g"], capture_output=True, text=True,
+            out = procs.run([npm, "prefix", "-g"], capture_output=True, text=True,
                                  timeout=10)
             prefix = (out.stdout or "").strip()
             if prefix:
@@ -149,7 +150,7 @@ def _find_bin(names):
 
 def _bin_version(b):
     try:
-        out = subprocess.run([b, "--version"], capture_output=True, text=True, timeout=8)
+        out = procs.run([b, "--version"], capture_output=True, text=True, timeout=8)
         return (out.stdout or out.stderr).strip() or None
     except Exception:
         return None
@@ -181,7 +182,7 @@ def _run_cli(run, adapter, work_dir, message, mode, model, resume, focus_name, f
     if env_extra:
         env.update(env_extra)
     try:
-        proc = subprocess.Popen(
+        proc = procs.popen(
             cmd, cwd=work_dir,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, bufsize=1,

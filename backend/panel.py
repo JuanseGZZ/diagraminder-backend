@@ -17,6 +17,7 @@ Tres cosas hace:
 
 Sin dependencias nuevas: stdlib pelada, igual que el resto del backend.
 """
+import procs
 import json
 import os
 import platform
@@ -113,10 +114,11 @@ _CLIS_TS = 0.0
 _CLIS_TTL = 20.0
 
 
-def _clis():
-    global _CLIS_CACHE, _CLIS_TS
-    if _CLIS_CACHE is not None and time.time() - _CLIS_TS < _CLIS_TTL:
-        return _CLIS_CACHE
+_CLIS_LOCK = threading.Lock()
+_CLIS_CALC = False          # hay un refresco corriendo en otro hilo
+
+
+def _calcular_clis():
     out = []
     for a in CLIS.values():
         b = a.find()
@@ -125,8 +127,48 @@ def _clis():
             "version": a.version(b) if b else None, "resume": a.supports_resume,
             "docs": DOCS.get(a.key, ""), "install": install_plan(a.key),
         })
-    _CLIS_CACHE, _CLIS_TS = out, time.time()
     return out
+
+
+def _refrescar_clis():
+    global _CLIS_CACHE, _CLIS_TS, _CLIS_CALC
+    try:
+        out = _calcular_clis()
+        _CLIS_CACHE, _CLIS_TS = out, time.time()
+    except Exception:
+        pass
+    finally:
+        with _CLIS_LOCK:
+            _CLIS_CALC = False
+
+
+def _clis():
+    """La lista, calculándola si hace falta. BLOQUEA: la usa el panel, que es una
+    pantalla que el usuario abrió y puede esperar."""
+    global _CLIS_CACHE, _CLIS_TS
+    if _CLIS_CACHE is not None and time.time() - _CLIS_TS < _CLIS_TTL:
+        return _CLIS_CACHE
+    _CLIS_CACHE, _CLIS_TS = _calcular_clis(), time.time()
+    return _CLIS_CACHE
+
+
+def clis_rapido():
+    """Lo que se sepa AHORA, sin spawnear nada. Si está vencido, dispara el refresco
+    en otro hilo y devuelve lo viejo (o [] la primera vez).
+
+    Existe por `/health`, que es un chequeo de VIDA y lo llama el latido de la web
+    cada 5s: detectar CLIs cuesta un subproceso por cada uno, y en Windows cada
+    subproceso además ABRE UNA CONSOLA. Con /health probando en cada request eso era
+    una consola parpadeando sin parar y —peor— un /health que tardaba más que el
+    timeout del latido, así que la app nunca terminaba de conectarse (2026-09-21)."""
+    global _CLIS_CALC
+    vencido = _CLIS_CACHE is None or time.time() - _CLIS_TS >= _CLIS_TTL
+    if vencido:
+        with _CLIS_LOCK:
+            if not _CLIS_CALC:
+                _CLIS_CALC = True
+                threading.Thread(target=_refrescar_clis, daemon=True).start()
+    return _CLIS_CACHE or []
 
 
 def _uptime():
@@ -245,7 +287,7 @@ def _run_install_cmd(run, cmd):
     env["PATH"] = os.pathsep.join(_extra_bin_dirs() + [env.get("PATH", "")])
 
     try:
-        proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        proc = procs.popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 stdin=subprocess.DEVNULL, text=True, encoding="utf-8",
                                 errors="replace", bufsize=1, env=env)
     except Exception as e:
@@ -391,7 +433,7 @@ def open_panel(url):
         if not b or not os.path.exists(b):
             continue
         try:
-            subprocess.Popen(
+            procs.popen(
                 # Ancha, no alta: adentro va la APP (un canvas), no el panel angosto
                 # de antes. Una ventana más alta que ancha deja el lienzo apretado.
                 [b, f"--app={url}", "--window-size=1340,860", "--window-position=60,40",
