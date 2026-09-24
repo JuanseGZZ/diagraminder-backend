@@ -31,7 +31,7 @@ cd diagraminder-backend
 python3 backend/server.py
 ```
 
-Then open **https://diagraminder.com** and, in **Settings**, click **Connect local**.
+Then open **https://diagraminder.com** and, in **Settings**, click **Connect backend**.
 The website will ask for a password the first time: that is the access token, printed
 on startup and stored in `token.txt` inside the data folder (the path is printed too).
 
