@@ -23,6 +23,11 @@ SERVER = os.path.join(BACKEND, "server.py")
 
 ok = fail = 0
 
+# Las del nivel "diagramas": las 4 de siempre + las 8 de memoria (diagram_memory.py)
+DIAGRAM_TOOLS = sorted(["diagram_schema", "list_diagrams", "read_diagram", "write_diagram",
+                        "memory_overview", "memory_search", "memory_read", "memory_add",
+                        "memory_update", "memory_link", "memory_unlink", "memory_delete"])
+
 
 def check(nombre, cond, extra=""):
     global ok, fail
@@ -112,8 +117,8 @@ try:
     check("initialize responde", (r.get("result") or {}).get("serverInfo", {}).get("name") == "diagraminder",
           json.dumps(r)[:120])
     tools = [t["name"] for t in (mcp.pedir("tools/list").get("result") or {}).get("tools", [])]
-    check("declara las 4 tools",
-          sorted(tools) == ["diagram_schema", "list_diagrams", "read_diagram", "write_diagram"], str(tools))
+    check("declara las 12 tools de diagramas (4 de JSON + 8 de memoria)",
+          sorted(tools) == DIAGRAM_TOOLS, str(tools))
 
     print("\n### B. ver lo que hay")
     txt, err = mcp.tool("list_diagrams")
@@ -156,6 +161,196 @@ try:
     txt, err = mcp.tool("write_diagram", {"name": "Mapa"})
     check("sin `json` avisa qué falta", err and "json" in txt.lower(), txt[:120])
 
+
+    print("\n### M. la MEMORIA: recorrer en vez de tragar (diagram_memory.py)")
+    # Un canvas como el que motivó esto (2026-09-24): ~76 nodos, con texto DE VERDAD y
+    # flechas con etiqueta, un hub y un sector. Si la memoria no ahorra acá, no ahorra.
+    import random as _rnd
+    _rnd.seed(3)
+    nodos, flechas = [], []
+    temas = ["auth", "sesión", "billing", "export", "mcp", "tunnel", "versions", "layout"]
+    for i in range(1, 77):
+        tema = temas[i % len(temas)]
+        nodos.append({"id": i, "x": (i % 10) * 340, "y": (i // 10) * 260, "ancho": 300, "alto": 200,
+                      "titulo": f"{tema} {i}", "contenido":
+                      f"<h3>{tema} {i}</h3><p>Decision about <b>{tema}</b>: we chose option {i} "
+                      f"because the previous one broke under load.</p><ul><li>gotcha {i}: "
+                      f"watch the cache</li><li>state: done</li></ul>",
+                      "color": None, "type": "md", "data": {"grupo": None}})
+    for i in range(2, 77):
+        flechas.append({"id": i - 1, "fromId": 1 if i < 14 else _rnd.randint(1, i - 1), "toId": i,
+                        "fromSide": "right", "toSide": "left", "label": "uses" if i % 3 == 0 else "",
+                        "color": None, "kind": None, "attrId": None})
+    nodos[4]["type"] = "basic"; nodos[4]["contenido"] = ""          # el [5] es un basic
+    grupo = {"id": 90, "x": 3600, "y": 0, "ancho": 800, "alto": 600, "titulo": "Backend",
+             "contenido": "", "color": None, "type": "grupo", "data": {}}
+    nodos.append(grupo)
+    nodos[39]["x"], nodos[39]["y"], nodos[39]["data"]["grupo"] = 3700, 100, 90   # el [40] vive en el sector
+    canvas = {"type": "freestyle", "lastIdCharged": 90, "lastArrowId": 75, "lastShapeId": 0,
+              "attachments": {}, "nodos": nodos, "flechas": flechas, "formas": []}
+    arbol = {"type": "cart", "lastIdCharged": 5, "attachments": {}, "nodoRaiz": {
+        "idCarta": 0, "idPadre": None, "tituloCarta": "Proyecto", "descripcion": "<p>el mapa</p>",
+        "color": None, "shape": "default", "collapsed": True, "hijosOcultos": False, "listaHijos": [
+            {"idCarta": 1, "idPadre": 0, "tituloCarta": "Backend", "descripcion": "<p>Python stdlib</p>",
+             "color": None, "shape": "default", "collapsed": True, "hijosOcultos": False, "listaHijos": [
+                 {"idCarta": 2, "idPadre": 1, "tituloCarta": "MCP", "descripcion": "<p>el sesión token va en el header</p>",
+                  "color": None, "shape": "default", "collapsed": True, "hijosOcultos": False, "listaHijos": []},
+                 {"idCarta": 3, "idPadre": 1, "tituloCarta": "Túnel", "descripcion": "",
+                  "color": None, "shape": "default", "collapsed": True, "hijosOcultos": False, "listaHijos": []}]},
+            {"idCarta": 4, "idPadre": 0, "tituloCarta": "Web", "descripcion": "<p>vanilla JS</p>",
+             "color": None, "shape": "default", "collapsed": True, "hijosOcultos": False, "listaHijos": []}]}}
+    for nombre, obj in [("Memoria", canvas), ("Doc", arbol)]:
+        d = os.path.join(root, "Local", nombre)
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "tree.json"), "w", encoding="utf-8") as f:
+            json.dump(obj, f)
+
+    def disco(nombre):
+        return json.load(open(os.path.join(root, "Local", nombre, "tree.json"), encoding="utf-8"))
+
+    entero, _ = mcp.tool("read_diagram", {"name": "Memoria"})
+
+    # --- leer ---
+    txt, err = mcp.tool("memory_overview", {"name": "Memoria"})
+    lineas = txt.split("\n")
+    check("overview: responde, sin coordenadas ni HTML", not err and '"x"' not in txt and "<h3>" not in txt, txt[:160])
+    check("overview: el hub (el más conectado) va primero", len(lineas) > 1 and lineas[1].startswith("[1] "), lineas[1] if len(lineas) > 1 else txt)
+    check("overview: dice los sectores y quién está adentro", "[90] Backend (1 nodes)" in txt, txt[-200:])
+    check(f"overview: cuesta mucho menos que el JSON ({len(txt)} vs {len(entero)} chars)", len(txt) < len(entero) * 0.2)
+
+    txt, err = mcp.tool("memory_search", {"name": "Memoria", "query": "sesion"})
+    check("search: sin tildes encuentra «sesión»",
+          not err and txt.startswith("10 match") and "[1] sesión 1" in txt, txt[:200])
+    txt, err = mcp.tool("memory_search", {"name": "Memoria", "query": "zzz inexistente"})
+    check("search: sin resultados lo dice (no es un error)", not err and "nothing matches" in txt, txt[:120])
+
+    uno, err = mcp.tool("memory_read", {"name": "Memoria", "ids": [7]})
+    check("read: trae el texto del nodo, legible", not err and "we chose option 7" in uno and "- gotcha 7" in uno, uno[:300])
+    check("read: sin repetir el título como encabezado", "# " not in uno.split("\n", 1)[1][:40], uno[:200])
+    check("read: dice quién le apunta", "← pointed from: [1]" in uno, uno)
+    check(f"read de un nodo: <5% del JSON entero ({len(uno)} vs {len(entero)} chars)", len(uno) < len(entero) * 0.05)
+    txt, err = mcp.tool("memory_read", {"name": "Memoria", "ids": [7], "depth": 1})
+    check("read con depth=1 trae también el texto de los vecinos", "we chose option 1 " in txt, txt[:400])
+    txt, err = mcp.tool("memory_read", {"name": "Memoria", "ids": [999]})
+    check("read de un id que no existe: error claro", err and "999" in txt, txt)
+
+    # --- escribir en el canvas ---
+    txt, err = mcp.tool("memory_add", {"name": "Memoria", "anchor": 7, "title": "Retry policy",
+                                       "content": "# ignored heading\nWe retry **3 times**.\n- backoff\n- jitter",
+                                       "label": "refines"})
+    check("add (hijo): responde OK y promete solo lo verificado", not err and "on screen" in txt, txt)
+    c = disco("Memoria")
+    nuevo = next((n for n in c["nodos"] if n.get("titulo") == "Retry policy"), None)
+    check("…el nodo está en el disco, como tarjeta md", nuevo is not None and nuevo["type"] == "md", str(nuevo)[:160])
+    check("…con el markdown hecho HTML del editor",
+          nuevo and "<b>3 times</b>" in nuevo["contenido"] and "<ul><li>backoff</li>" in nuevo["contenido"], (nuevo or {}).get("contenido", "")[:200])
+    check("…el contador de ids subió y el id es ese", nuevo and c["lastIdCharged"] == nuevo["id"] == 91, str(c["lastIdCharged"]))
+    fl = [f for f in c["flechas"] if f["toId"] == (nuevo or {}).get("id")]
+    check("…y una flecha 7 → nuevo con su etiqueta", len(fl) == 1 and fl[0]["fromId"] == 7 and fl[0]["label"] == "refines", str(fl))
+    choca = [m["id"] for m in c["nodos"] if nuevo and m is not nuevo and m["type"] != "grupo" and
+             m["x"] < nuevo["x"] + nuevo["ancho"] and nuevo["x"] < m["x"] + m["ancho"] and
+             m["y"] < nuevo["y"] + nuevo["alto"] and nuevo["y"] < m["y"] + m["alto"]]
+    check("…en un lugar libre: no pisa ningún nodo", not choca, str(choca))
+    CAMPOS_N = {"id", "x", "y", "ancho", "alto", "titulo", "contenido", "color", "type", "data"}
+    CAMPOS_F = {"id", "fromId", "toId", "fromSide", "toSide", "label", "color", "kind", "attrId"}
+    check("…con EXACTAMENTE los campos del esquema (nodo y flecha)",
+          nuevo and set(nuevo) == CAMPOS_N and all(set(f) == CAMPOS_F for f in fl), str(sorted(nuevo or {})))
+
+    txt, err = mcp.tool("memory_add", {"name": "Memoria", "anchor": 7, "relation": "sibling", "title": "Timeout policy"})
+    c = disco("Memoria")
+    herm = next(n for n in c["nodos"] if n.get("titulo") == "Timeout policy")
+    padres7 = {f["fromId"] for f in c["flechas"] if f["toId"] == 7}
+    check("add (hermano): le apunta lo mismo que al ancla",
+          padres7 and {f["fromId"] for f in c["flechas"] if f["toId"] == herm["id"]} == padres7, txt)
+
+    txt, err = mcp.tool("memory_add", {"name": "Memoria", "anchor": 40, "title": "DB pool"})
+    c = disco("Memoria")
+    pool = next(n for n in c["nodos"] if n.get("titulo") == "DB pool")
+    g = next(n for n in c["nodos"] if n["id"] == 90)
+    check("add junto a un nodo de un sector: queda en ese sector", pool["data"].get("grupo") == 90, str(pool["data"]))
+    check("…y el sector creció hasta envolverlo",
+          g["x"] <= pool["x"] and g["y"] <= pool["y"] and pool["x"] + pool["ancho"] <= g["x"] + g["ancho"]
+          and pool["y"] + pool["alto"] <= g["y"] + g["alto"], json.dumps({k: g[k] for k in ("x", "y", "ancho", "alto")}))
+
+    txt, err = mcp.tool("memory_update", {"name": "Memoria", "id": 7, "append": "Update: it now also covers **retries**."})
+    c = disco("Memoria")
+    n7 = next(n for n in c["nodos"] if n["id"] == 7)
+    check("update con append: agrega sin perder lo que había",
+          not err and "we chose option 7" in n7["contenido"] and "<b>retries</b>" in n7["contenido"], txt)
+    txt, err = mcp.tool("memory_update", {"name": "Memoria", "id": 7, "title": "auth v2"})
+    n7 = next(n for n in disco("Memoria")["nodos"] if n["id"] == 7)
+    check("update del título: cambia también el encabezado de la tarjeta",
+          n7["titulo"] == "auth v2" and n7["contenido"].startswith("<h3>auth v2</h3>"), n7["contenido"][:80])
+    txt, err = mcp.tool("memory_update", {"name": "Memoria", "id": 5, "content": "now it has text"})
+    n5 = next(n for n in disco("Memoria")["nodos"] if n["id"] == 5)
+    check("un basic con texto pasa a tarjeta md (si no, el texto sería invisible)",
+          n5["type"] == "md" and "now it has text" in n5["contenido"], str(n5)[:160])
+
+    txt, err = mcp.tool("memory_link", {"name": "Memoria", "from": 10, "to": 20, "label": "caused by"})
+    c = disco("Memoria")
+    check("link: flecha nueva con etiqueta", any(f["fromId"] == 10 and f["toId"] == 20 and f["label"] == "caused by" for f in c["flechas"]), txt)
+    txt, err = mcp.tool("memory_link", {"name": "Memoria", "from": 10, "to": 90})
+    check("link a un sector se rechaza (no son destino de flechas)", err and "group" in txt, txt)
+    txt, err = mcp.tool("memory_unlink", {"name": "Memoria", "from": 20, "to": 10})
+    check("unlink al revés: avisa que la flecha va para el otro lado", err and "other way" in txt, txt)
+    txt, err = mcp.tool("memory_unlink", {"name": "Memoria", "from": 10, "to": 20})
+    check("unlink: la saca", not err and not any(f["fromId"] == 10 and f["toId"] == 20 for f in disco("Memoria")["flechas"]), txt)
+
+    txt, err = mcp.tool("memory_delete", {"name": "Memoria", "id": 91})
+    c = disco("Memoria")
+    check("delete: se va el nodo y sus flechas",
+          not any(n["id"] == 91 for n in c["nodos"]) and not any(91 in (f["fromId"], f["toId"]) for f in c["flechas"]), txt)
+    ids = [n["id"] for n in c["nodos"]] + [f["id"] + 10000 for f in c["flechas"]]
+    check("después de todo: ids únicos y el JSON sigue siendo un canvas", len(ids) == len(set(ids)) and c["type"] == "freestyle")
+
+    # --- el organigrama ---
+    txt, err = mcp.tool("memory_overview", {"name": "Doc"})
+    check("overview del organigrama: un índice con sangría y +hijos",
+          not err and "- [0] Proyecto (+2)" in txt and "  - [1] Backend (+2)" in txt and "    - [2] MCP" in txt, txt)
+    txt, err = mcp.tool("memory_read", {"name": "Doc", "ids": [2]})
+    check("read de una carta: su texto y su ruta", "path: Proyecto › Backend" in txt and "header" in txt, txt)
+    txt, err = mcp.tool("memory_search", {"name": "Doc", "query": "SESION token"})
+    check("search en el organigrama", not err and "[2] MCP" in txt, txt)
+
+    mcp.tool("memory_add", {"name": "Doc", "anchor": 2, "relation": "sibling", "title": "Policy"})
+    mcp.tool("memory_add", {"name": "Doc", "anchor": 4, "title": "Home", "content": "the onboarding"})
+    txt, err = mcp.tool("memory_add", {"name": "Doc", "anchor": 3, "relation": "parent", "title": "Red"})
+    a = disco("Doc")
+
+    def cartas(n):
+        yield n
+        for h in n["listaHijos"]:
+            yield from cartas(h)
+    todas = {c_["idCarta"]: c_ for c_ in cartas(a["nodoRaiz"])}
+    back = todas[1]
+    check("add hermano en el árbol: queda al lado, bajo el mismo padre",
+          [h["tituloCarta"] for h in back["listaHijos"]][:2] == ["MCP", "Policy"], str([h["tituloCarta"] for h in back["listaHijos"]]))
+    red = next(c_ for c_ in todas.values() if c_["tituloCarta"] == "Red")
+    check("add padre: la carta nueva toma el lugar y la vieja pasa a ser su hija",
+          red["idPadre"] == 1 and [h["idCarta"] for h in red["listaHijos"]] == [3] and todas[3]["idPadre"] == red["idCarta"], str(red)[:200])
+    CAMPOS_C = {"idCarta", "idPadre", "tituloCarta", "descripcion", "color", "shape", "collapsed", "hijosOcultos", "listaHijos"}
+    check("todas las cartas con EXACTAMENTE los campos del toJson()", all(set(c_) == CAMPOS_C for c_ in todas.values()),
+          str([sorted(c_) for c_ in todas.values() if set(c_) != CAMPOS_C][:1]))
+    check("cada idPadre coincide con quien la contiene",
+          all(h["idPadre"] == c_["idCarta"] for c_ in todas.values() for h in c_["listaHijos"]))
+    check("lastIdCharged es el id más alto", a["lastIdCharged"] == max(todas), f"{a['lastIdCharged']} vs {max(todas)}")
+
+    txt, err = mcp.tool("memory_overview", {"name": "Doc"})
+    check("el mapa aclara que la raíz es el lienzo (la app no la dibuja)", "NOT drawn as a card" in txt, txt[:200])
+    txt, err = mcp.tool("memory_add", {"name": "Doc", "anchor": 0, "relation": "parent", "title": "X"})
+    check("ponerle un padre a la raíz se rechaza (se volvería una carta visible)", err and "canvas itself" in txt, txt)
+    txt, err = mcp.tool("memory_update", {"name": "Doc", "id": 1, "move_under": 2})
+    check("move_under adentro de su propia rama se rechaza", err and "own branch" in txt, txt)
+    txt, err = mcp.tool("memory_update", {"name": "Doc", "id": 4, "move_under": 1})
+    a = disco("Doc")
+    check("move_under: cambia de padre", not err and any(h["idCarta"] == 4 for h in a["nodoRaiz"]["listaHijos"][0]["listaHijos"]), txt)
+    txt, err = mcp.tool("memory_delete", {"name": "Doc", "id": 4})
+    check("borrar una carta con hijos pide with_children", err and "with_children" in txt, txt)
+    txt, err = mcp.tool("memory_link", {"name": "Doc", "from": 2, "to": 3})
+    check("link en un árbol: explica que no hay links libres y qué usar", err and "move_under" in txt, txt)
+    txt, err = mcp.tool("memory_overview", {"name": "Pendientes"})
+    check("un tipo que no es memoria: dice cuáles sí y qué usar", err and "cart" in txt and "read_diagram" in txt, txt)
+
     print("\n### F. el interruptor y los niveles (doc 37 §F19)")
 
     def politica(**patch):
@@ -181,8 +376,7 @@ try:
     check("el rechazo dice DÓNDE prenderlo", "Settings" in txt, txt[:140])
 
     politica(enabled=True)
-    check("al prenderlo vuelven las 4 de diagramas", lista() == sorted(
-        ["diagram_schema", "list_diagrams", "read_diagram", "write_diagram"]), str(lista()))
+    check("al prenderlo vuelven las 12 de diagramas", lista() == DIAGRAM_TOOLS, str(lista()))
     txt, err = mcp.tool("read_diagram", {"name": "Mapa"})
     check("…y vuelve a funcionar", not err, txt[:100])
 
@@ -445,7 +639,7 @@ try:
                     {"Authorization": "Bearer " + at})
     nombres = sorted(t["name"] for t in (r.get("result") or {}).get("tools", []))
     check("tools/list por HTTP da las mismas tools que por stdio",
-          nombres == sorted(["diagram_schema", "list_diagrams", "read_diagram", "write_diagram"]), str(nombres))
+          nombres == DIAGRAM_TOOLS, str(nombres))
     st, r, _ = http("POST", "/mcp", {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
                                      "params": {"name": "list_diagrams", "arguments": {}}},
                     {"Authorization": "Bearer " + at})

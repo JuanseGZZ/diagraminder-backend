@@ -12,7 +12,7 @@ en cada `tools/call`, y el backend vuelve a chequear en `/fs` antes de tocar un 
 
 Los tres niveles son acumulativos:
 
-    diagrams  los 4 tools de diagramas. Es el default y es lo que hacía hasta hoy.
+    diagrams  los 4 tools de diagramas y las 8 de memoria (memory_*). Es el default.
     files     + leer/escribir/editar/grep/git, CONFINADO a `root`.
     shell     + ejecutar comandos. El confinamiento por carpeta NO alcanza contra un
               comando arbitrario, así que este nivel se elige a mano y se avisa.
@@ -28,7 +28,10 @@ NIVELES = ("diagrams", "files", "shell")
 # esto, así que un nivel que no incluye una tool NO la ve el modelo: preferimos que no
 # exista a que exista y sea rechazada (una lista corta se entiende; un rechazo, no).
 TOOLS_POR_NIVEL = {
-    "diagrams": ("list_diagrams", "read_diagram", "diagram_schema", "write_diagram"),
+    "diagrams": ("list_diagrams", "read_diagram", "diagram_schema", "write_diagram",
+                 # la memoria: los mismos diagramas, de a un nodo (diagram_memory.py)
+                 "memory_overview", "memory_search", "memory_read", "memory_add",
+                 "memory_update", "memory_link", "memory_unlink", "memory_delete"),
     "files": ("fs_tree", "fs_read", "fs_write", "fs_edit", "fs_mkdir", "fs_rename",
               "fs_delete", "fs_grep", "sv_save", "sv_list", "sv_restore",
               "gh_push", "gh_pull", "gh_log"),

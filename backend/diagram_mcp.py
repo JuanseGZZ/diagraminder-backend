@@ -27,6 +27,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import diagram_memory as _mem
 import editor_mcp as _fs
 import mcp_policy as _mp
 
@@ -91,6 +92,114 @@ TOOLS = [
             ["name", "json"]),
     },
 ]
+
+# ---------------------------------------------------------------------------------
+# La MEMORIA (diagram_memory.py): los mismos diagramas, recorridos de a un nodo en vez
+# de tragados enteros. Solo organigramas (cart) y canvases (freestyle). No reemplazan a
+# read/write_diagram: son la otra forma de trabajar con lo mismo.
+_DIAGRAMA = {"name": {"type": "string", "description": "the diagram's name (list_diagrams); a cart or a freestyle"},
+             "folder": {"type": "string", "description": "folder it lives in (optional if the name is unique)"}}
+_ID = {"type": "integer"}
+
+
+def _props(**extra):
+    return {**_DIAGRAMA, **extra}
+
+
+_COMO_MEMORIA = (
+    " Organigrams (cart) and canvases (freestyle) are the user's MEMORY: use them as one. "
+    "Traverse, don't swallow: memory_overview to get the map, memory_search to jump to "
+    "what matters, memory_read on those few nodes and their neighbours. Only fall back to "
+    "read_diagram when you really need the whole file.")
+
+MEMORY_TOOLS = [
+    {
+        "name": "memory_overview",
+        "description": (
+            "The MAP of an organigram or a canvas, cheap: every node as `[id] title`, with no "
+            "coordinates, colours or HTML. An organigram comes as an indented outline; a "
+            "canvas comes with its most connected nodes (the hubs) first, and its groups. "
+            "Start here." + _COMO_MEMORIA),
+        "inputSchema": _schema(_props(max_nodes={"type": "integer", "description": "cap (default 300)"}), ["name"]),
+    },
+    {
+        "name": "memory_search",
+        "description": (
+            "Finds the nodes of an organigram or a canvas whose title or text mention your "
+            "words (accent- and case-insensitive), best first, each with a snippet. Use it "
+            "before reading: it takes you straight to the cluster that matters."),
+        "inputSchema": _schema(_props(query=_STR, limit={"type": "integer", "description": "default 15"}),
+                               ["name", "query"]),
+    },
+    {
+        "name": "memory_read",
+        "description": (
+            "Reads some nodes as plain text, with their neighbours: parent, children and path "
+            "in an organigram; arrows in and out (with their labels) and the group in a canvas. "
+            "`depth` also reads the neighbours' text, 1 to 3 hops out (default 0: only the ids "
+            "you pass, neighbours by title). This is how you read the memory — a few nodes at "
+            "a time, never the whole thing."),
+        "inputSchema": _schema(_props(ids={"type": "array", "items": _ID, "description": "node ids (from memory_overview or memory_search)"},
+                                      depth={"type": "integer", "description": "0-3, default 0"}),
+                               ["name", "ids"]),
+    },
+    {
+        "name": "memory_add",
+        "description": (
+            "Adds ONE node next to another, and the user sees it appear on screen. `relation` "
+            "to the `anchor`: child (default), sibling (same parent in an organigram; pointed "
+            "from the same nodes on a canvas) or parent. On a canvas it lands in a free spot "
+            "near the anchor, inside the anchor's group, and anchoring on a group puts it "
+            "inside that group. `content` is plain text or light markdown (# heading, - "
+            "bullets, **bold**, `code`, [text](url)); it is converted for you. Keep a node to "
+            "ONE idea: if it grows, add a second node and link it. Without `anchor` it goes "
+            "under the root (organigram) or on its own (canvas)."),
+        "inputSchema": _schema(_props(title=_STR,
+                                      content={"type": "string", "description": "the text: decisions, state, gotchas — what is worth remembering"},
+                                      anchor={"type": "integer", "description": "id of the node it relates to"},
+                                      relation={"type": "string", "enum": ["child", "sibling", "parent"]},
+                                      label={"type": "string", "description": "canvas only: the arrow's label, e.g. 'depends on'"},
+                                      color={"type": "string", "description": "optional hex, e.g. #e53935"}),
+                               ["name", "title"]),
+    },
+    {
+        "name": "memory_update",
+        "description": (
+            "Edits ONE node: `title`, `content` (replaces the text), `append` (adds to the "
+            "end — the way to keep a memory up to date without losing what was there), "
+            "`color`, or, in an organigram, `move_under` another card. When you finish a task "
+            "and learned something, append it to the node it belongs to: a memory nobody "
+            "updates turns into noise."),
+        "inputSchema": _schema(_props(id=_ID, title=_STR, content=_STR, append=_STR,
+                                      color={"type": "string", "description": "hex, or \"\" to clear it"},
+                                      move_under={"type": "integer", "description": "organigram only: the new parent's id"}),
+                               ["name", "id"]),
+    },
+    {
+        "name": "memory_link",
+        "description": (
+            "Canvas only: draws an arrow `from` → `to`, with an optional `label` (what the "
+            "relation is: 'uses', 'caused by', 'replaces'). Linking is what makes the memory "
+            "associative — relate new knowledge to what it touches."),
+        "inputSchema": _schema(_props(**{"from": _ID, "to": _ID, "label": _STR}), ["name", "from", "to"]),
+    },
+    {
+        "name": "memory_unlink",
+        "description": "Canvas only: removes the arrow `from` → `to`.",
+        "inputSchema": _schema(_props(**{"from": _ID, "to": _ID}), ["name", "from", "to"]),
+    },
+    {
+        "name": "memory_delete",
+        "description": (
+            "Deletes ONE node (on a canvas, with its arrows; a deleted group frees its "
+            "members). In an organigram a card with children needs `with_children: true`, "
+            "which deletes the whole branch. Prefer memory_update to fix a node: delete only "
+            "what is wrong or obsolete."),
+        "inputSchema": _schema(_props(id=_ID, with_children={"type": "boolean"}), ["name", "id"]),
+    },
+]
+TOOLS = TOOLS + MEMORY_TOOLS
+_NOMBRES_MEMORIA = {t["name"] for t in MEMORY_TOOLS}
 
 
 def _api(path, body=None):
@@ -206,24 +315,80 @@ def call_tool(name, args):
         if previo and obj.get("type") != previo:
             return (f"this diagram is of type '{previo}' and your JSON says '{obj.get('type')}'. "
                     "Changing the type would break it — keep it as it was."), True
-        # `origin` importa: sin él el backend marca el mtime como ya visto —la
-        # supresión de eco pensada para la web— y el cambio NO se emite por SSE.
-        # El agente veía un 200, el usuario no veía nada, y el siguiente sync de la
-        # web le pasaba por encima. Decir quién escribe es lo que hace que el
-        # canvas se mueva solo (bitácora 2026-09-19).
-        res, err = _api("/state/write", {"folder": folder, "name": nombre_real,
-                                         "treeJson": obj, "origin": "mcp"})
-        if err:
-            return err, True
-        # Y no se promete lo que no se verificó: si el backend NO lo emitió, la web
-        # no se enteró, y decir "ya lo ve en pantalla" sería mentirle al modelo.
-        if isinstance(res, dict) and not res.get("emitted"):
-            return (f"'{nombre_real}' was written to disk, but the app was NOT notified, "
-                    "so the user may not see it yet and an app-side save could overwrite "
-                    "it. Tell the user to reopen the diagram."), True
-        return f"OK: '{nombre_real}' updated. The user can see it on screen already.", False
+        return _escribir(folder, nombre_real, obj, f"OK: '{nombre_real}' updated.")
+
+    if name in _NOMBRES_MEMORIA:
+        return _memoria(name, args)
 
     return f"unknown tool: {name}", True
+
+
+def _escribir(folder, nombre_real, obj, hecho):
+    """Escribe un diagrama por /state/write. Lo comparten write_diagram y las memory_*:
+    un solo camino de escritura, con las dos guardas que costó aprender."""
+    # `origin` importa: sin él el backend marca el mtime como ya visto —la
+    # supresión de eco pensada para la web— y el cambio NO se emite por SSE.
+    # El agente veía un 200, el usuario no veía nada, y el siguiente sync de la
+    # web le pasaba por encima. Decir quién escribe es lo que hace que el
+    # canvas se mueva solo (bitácora 2026-09-19).
+    res, err = _api("/state/write", {"folder": folder, "name": nombre_real,
+                                     "treeJson": obj, "origin": "mcp"})
+    if err:
+        return err, True
+    # Y no se promete lo que no se verificó: si el backend NO lo emitió, la web
+    # no se enteró, y decir "ya lo ve en pantalla" sería mentirle al modelo.
+    if isinstance(res, dict) and not res.get("emitted"):
+        return (f"'{nombre_real}' was written to disk, but the app was NOT notified, "
+                "so the user may not see it yet and an app-side save could overwrite "
+                "it. Tell the user to reopen the diagram."), True
+    return f"{hecho} The user can see it on screen already.", False
+
+
+def _memoria(name, args):
+    """Las memory_*: leen el diagrama FRESCO en cada llamada (así un 409 se arregla
+    repitiendo la misma llamada) y, si escriben, lo hacen por el mismo camino."""
+    nombre = (args.get("name") or "").strip()
+    if not nombre:
+        return "`name` is required (use list_diagrams to see them).", True
+    hit, err = _buscar(nombre, (args.get("folder") or "").strip() or None)
+    if err:
+        return err, True
+    folder, nombre_real, tj = hit
+    try:
+        obj = json.loads(tj or "{}")
+    except json.JSONDecodeError:
+        return f"'{nombre_real}' is not valid JSON on disk; open it in the app first.", True
+    try:
+        if name == "memory_overview":
+            return _mem.overview(obj, args.get("max_nodes") or 300), False
+        if name == "memory_search":
+            return _mem.search(obj, args.get("query") or "", args.get("limit") or 15), False
+        if name == "memory_read":
+            ids = args.get("ids")
+            if ids is None and args.get("id") is not None:
+                ids = [args.get("id")]
+            return _mem.read(obj, ids if ids is not None else [], args.get("depth") or 0), False
+        if name == "memory_add":
+            hecho, nuevo = _mem.add(obj, args.get("title"), args.get("content") or "", args.get("anchor"),
+                                    args.get("relation") or "child", args.get("label") or "", args.get("color"))
+        elif name == "memory_update":
+            hecho, nuevo = _mem.update(obj, args.get("id"), args.get("title"), args.get("content"),
+                                       args.get("append"), args.get("color"), args.get("move_under"))
+        elif name == "memory_link":
+            hecho, nuevo = _mem.link(obj, args.get("from"), args.get("to"), args.get("label") or "")
+        elif name == "memory_unlink":
+            hecho, nuevo = _mem.unlink(obj, args.get("from"), args.get("to"))
+        elif name == "memory_delete":
+            hecho, nuevo = _mem.delete(obj, args.get("id"), bool(args.get("with_children")))
+        else:
+            return f"unknown tool: {name}", True
+    except _mem.MemoryToolError as e:
+        return str(e), True
+    texto, es_error = _escribir(folder, nombre_real, nuevo, hecho[0].upper() + hecho[1:])
+    if es_error and "just edited" in texto:
+        texto = ("the user just edited this diagram from the app. Repeat the SAME call: "
+                 "it reads the diagram fresh, so your change lands on top of theirs.")
+    return texto, es_error
 
 
 # Las descripciones de editor_mcp hablan del "editor project" y del "connector":

@@ -69,7 +69,7 @@ DEFAULT_PORT = 8765
 # del orquestador necesitan la URL propia para hablarle al MCP del editor.
 PORT = DEFAULT_PORT
 NAME = "DiagraMinder"
-VERSION = "0.35.0"   # el MCP se prende/apaga, tres niveles, y sale por un túnel con OAuth
+VERSION = "0.35.0"   # el MCP se prende/apaga, tres niveles, túnel con OAuth, y las tools de MEMORIA
 
 # ===================== rutas / disco =====================
 
