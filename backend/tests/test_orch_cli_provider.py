@@ -250,5 +250,32 @@ with tempfile.TemporaryDirectory() as tmp:
     check("…y no se le pasa a otro CLI", cli_session_get(ctx, "n3", "local-antigravity") is None)
     check("sin pedir CLI, devuelve lo que haya (compat)", cli_session_get(ctx, "n3") == "vieja")
 
+print("\n=== I. los locks de un agente con una CARPETA cableada ===")
+# Un agFolder no tiene `projectId` (tiene `path`): `_lock_keys` lo indexaba a pelo y el
+# run moría con «error interno del motor: 'projectId'» antes del primer turno.
+with tempfile.TemporaryDirectory() as tmp:
+    graph = {"nodos": {
+        1: {"id": 1, "type": "agAgent", "data": {}},
+        2: {"id": 2, "type": "agFolder", "data": {"path": tmp, "permiso": "editar"}},
+        3: {"id": 3, "type": "agFolder", "data": {"path": tmp + "/", "permiso": "editar"}},
+        4: {"id": 4, "type": "agResource", "data": {"projectId": "p9", "permiso": "editar"}},
+        5: {"id": 5, "type": "agFolder", "data": {"path": tmp, "permiso": "leer"}},
+    }, "flechas": [{"kind": "usa", "fromId": 1, "toId": t} for t in (2, 3, 4, 5)]}
+    try:
+        keys = orchestrator._lock_keys(graph, {"nodeId": 1})
+        err = None
+    except Exception as e:
+        keys, err = [], e
+    check("una carpeta cableada NO tira KeyError", err is None, repr(err))
+    dirs = [k for k in keys if k.startswith("dir:")]
+    check("la carpeta se lockea por su path real", dirs == [f"dir:{os.path.realpath(tmp)}"] * 2, str(keys))
+    check("el proyecto sigue lockeándose por su id", "res:p9" in keys, str(keys))
+    check("con permiso «leer» no toma lock", len(keys) == 4, str(keys))
+    run = {"locks": {}}
+    orchestrator._try_locks(graph, run, {"id": "f1", "nodeId": 1})
+    graph["flechas"].append({"kind": "usa", "fromId": 6, "toId": 3})
+    check("otro agente sobre la MISMA carpeta espera",
+          orchestrator._try_locks(graph, run, {"id": "f2", "nodeId": 6}) is False)
+
 print(f"\n{'✅' if fail == 0 else '❌'} {ok}/{ok + fail}")
 sys.exit(0 if fail == 0 else 1)

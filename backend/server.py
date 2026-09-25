@@ -69,7 +69,7 @@ DEFAULT_PORT = 8765
 # del orquestador necesitan la URL propia para hablarle al MCP del editor.
 PORT = DEFAULT_PORT
 NAME = "DiagraMinder"
-VERSION = "0.35.0"   # el MCP se prende/apaga, tres niveles, túnel con OAuth, y las tools de MEMORIA
+VERSION = "0.35.1"   # un agente con una carpeta cableada ya corre (el lock no conocía a agFolder)
 
 # ===================== rutas / disco =====================
 

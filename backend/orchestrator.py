@@ -1591,11 +1591,22 @@ def snapshot_resources(ctx, run, graph, node):
 # TODOS sus locks o ninguno (sin deadlock posible) y los mantiene entre iteraciones
 # de tools; los suelta al responder, delegar o preguntar.
 
+def _lock_key(r):
+    """La llave del lock de UN recurso. Un agFolder no tiene `projectId` (tiene `path`,
+    doc 37 §F3): indexarlo a pelo tiraba KeyError y mataba el run antes del primer
+    turno. Se lockea por la carpeta REAL, así dos nodos-carpeta que apuntan al mismo
+    directorio no escriben a la vez."""
+    d = r.get("data") or {}
+    if r.get("type") == "agFolder":
+        return f"dir:{os.path.realpath(os.path.expanduser(d['path']))}"
+    return f"res:{d['projectId']}"
+
+
 def _lock_keys(graph, frame):
     keys = [f"node:{frame['nodeId']}"]
     for r in resources_of(graph, frame["nodeId"]):
         if PERM_LEVEL.get((r["data"] or {}).get("permiso") or "editar", 1) >= 1:
-            keys.append(f"res:{r['data']['projectId']}")
+            keys.append(_lock_key(r))
     return keys
 
 
