@@ -69,7 +69,7 @@ DEFAULT_PORT = 8765
 # del orquestador necesitan la URL propia para hablarle al MCP del editor.
 PORT = DEFAULT_PORT
 NAME = "DiagraMinder"
-VERSION = "0.37.0"   # la bandeja de documentos + los modos del chat (aceptar todo / plan aprobado)
+VERSION = "0.37.1"   # orquestador: default claude-sonnet-5-5
 
 # ===================== rutas / disco =====================
 
