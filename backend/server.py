@@ -597,11 +597,48 @@ def iter_disk_trees():
                 yield fname, tname, fp
 
 
+def ingest_docs_inbox(fp):
+    """La bandeja de entrada de un proyecto `documents` (docsfs.ingest_inbox): lo que un
+    agente dejó en `documents/inbox/` entra a la biblioteca. Corre en cada pasada del
+    watcher, así que lo barato va primero: sin carpeta `inbox`, un stat y afuera.
+
+    Reescribe el tree.json SIN marcar el mtime como visto: es justamente lo que hace
+    que el watcher, unas líneas más abajo, lo emita a la web como cualquier cambio
+    externo (y ella baje los bytes al abrir la biblioteca). Bajo STATE_LOCK para no
+    cruzarse con un /state/write de la web que traiga el manifiesto viejo: ese choca
+    con el 409 de la anti-pisada, que es lo que tiene que pasar."""
+    tdir = os.path.dirname(fp)
+    if not os.path.isdir(docsfs.inbox_dir(tdir)):
+        return 0
+    with STATE_LOCK:
+        try:
+            with open(fp, "r", encoding="utf-8") as f:
+                manifest = json.load(f)
+        except Exception:
+            return 0
+        if not isinstance(manifest, dict) or manifest.get("type") != "documents":
+            return 0
+        agregados, _ = docsfs.ingest_inbox(tdir, manifest)
+        if not agregados:
+            return 0
+        tmp = fp + ".ingest"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, fp)
+    # la vista legible, ya con los nuevos: el agente puede verificar que entraron
+    docsfs.docs_link_names(tdir, manifest.get("docs") or [])
+    return len(agregados)
+
+
 def watch_state(interval=0.5):
     """Thread: detecta cambios de mtime en los tree.json (2 niveles) y los emite."""
     while True:
         try:
             for folder, tname, fp in iter_disk_trees():
+                try:
+                    ingest_docs_inbox(fp)
+                except Exception:
+                    pass
                 try:
                     mtime = os.path.getmtime(fp)
                 except OSError:

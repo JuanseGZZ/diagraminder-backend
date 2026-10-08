@@ -167,9 +167,20 @@ def docs_link_names(project_dir, entries):
     return made
 
 
-def docs_gc(project_dir, keep_hashes):
+GC_GRACE_S = 60      # un blob más nuevo que esto no se poda (ver docs_gc)
+
+
+def docs_gc(project_dir, keep_hashes, now=None):
     """Borra del disco los blobs que el manifiesto ya no referencia. `keep_hashes`
-    es la lista de hashes del tree.json (la web la manda al sincronizar)."""
+    es la lista de hashes del tree.json (la web la manda al sincronizar).
+
+    Un blob de menos de GC_GRACE_S NO se borra: la web poda con SU manifiesto, y uno
+    que un agente acaba de dejar por la bandeja (ingest_inbox) todavía no le llegó.
+    Sin la gracia, una sync de la web en ese medio segundo se comía el archivo nuevo
+    y el manifiesto quedaba apuntando a nada. Lo que de verdad sobra se va en la
+    próxima sync."""
+    import time
+    now = time.time() if now is None else now
     keep = {h.lower() for h in (keep_hashes or []) if valid_hash(h)}
     d = docs_dir(project_dir)
     removed = []
@@ -180,8 +191,144 @@ def docs_gc(project_dir, keep_hashes):
     for n in names:
         if valid_hash(n) and n.lower() not in keep:
             try:
+                if now - os.path.getmtime(os.path.join(d, n)) < GC_GRACE_S:
+                    continue
+            except OSError:
+                continue
+            try:
                 os.remove(os.path.join(d, n))
                 removed.append(n)
             except OSError:
                 pass
     return 200, {"ok": True, "removed": removed}
+
+
+# ===================== la BANDEJA DE ENTRADA (2026-10-08) =====================
+# Antes el agente no podía AGREGAR nada a la biblioteca: la skill le decía «que lo suba
+# el usuario». Pedirle «leé estos archivos y hacé otro con X» terminaba en un archivo
+# suelto que la app no mostraba. Ahora el agente deja el archivo en
+# `documents/inbox/[carpeta virtual/]nombre.ext` y el backend lo INGIERE: lo guarda por
+# hash, lo agrega al manifiesto y el watcher se lo emite a la web, que baja los bytes.
+
+INBOX_DIRNAME = "inbox"
+MAX_INGEST = 100 * 1024 * 1024        # el mismo tope que la subida de la web
+SETTLE_S = 1.0                        # un archivo más nuevo que esto puede estar a medio escribir
+_MIME_EXTRA = {".md": "text/markdown", ".markdown": "text/markdown", ".txt": "text/plain",
+               ".csv": "text/csv", ".json": "application/json", ".pdf": "application/pdf",
+               ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+               ".html": "text/html", ".svg": "image/svg+xml", ".png": "image/png",
+               ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".mp3": "audio/mpeg"}
+
+
+def inbox_dir(project_dir):
+    return os.path.join(docs_dir(project_dir), INBOX_DIRNAME)
+
+
+def _mime_of(name):
+    ext = os.path.splitext(name)[1].lower()
+    if ext in _MIME_EXTRA:
+        return _MIME_EXTRA[ext]
+    import mimetypes
+    return mimetypes.guess_type(name)[0] or ""
+
+
+def _ignorable(name):
+    """Temporales de editores y del sistema: no son documentos."""
+    return (name.startswith(".") or name.startswith("~$") or name.endswith((".part", ".tmp", ".swp", "~"))
+            or name in ("Thumbs.db", "desktop.ini"))
+
+
+def _nombre_libre(docs, name, d):
+    """Si ya hay un doc con ese nombre en esa carpeta, «nombre (2).ext»: pisar uno
+    del usuario con lo que escribió el agente sería perder trabajo."""
+    usados = {x.get("name") for x in docs if (x.get("dir") or "") == d}
+    if name not in usados:
+        return name
+    stem, ext = os.path.splitext(name)
+    n = 2
+    while f"{stem} ({n}){ext}" in usados:
+        n += 1
+    return f"{stem} ({n}){ext}"
+
+
+def ingest_inbox(project_dir, manifest, now=None):
+    """Mueve lo que haya en la bandeja al store y lo agrega al manifiesto (un dict del
+    tree.json de tipo documents, que se MODIFICA en el lugar).
+
+    Devuelve (agregados, rechazados): listas de dicts. Si no hay nada listo, ([], []).
+    Un archivo que todavía se está escribiendo (mtime de hace menos de SETTLE_S) se
+    deja para la próxima pasada. Uno demasiado grande se deja donde está, con un
+    `<nombre>.TOO-BIG.txt` al lado que lo explica (el agente mira la carpeta)."""
+    import time
+    now = time.time() if now is None else now
+    root = inbox_dir(project_dir)
+    if not os.path.isdir(root):
+        return [], []
+    docs = manifest.setdefault("docs", [])
+    dirs = manifest.setdefault("dirs", [])
+    last = max([manifest.get("lastId") or 0] + [x.get("id") or 0 for x in docs])
+    agregados, rechazados = [], []
+    for base, subdirs, files in os.walk(root):
+        subdirs[:] = [s for s in subdirs if not s.startswith(".")]
+        rel = os.path.relpath(base, root)
+        parts = [] if rel == "." else [p for p in (_safe_component(x) for x in rel.split(os.sep)) if p]
+        vdir = "/".join(parts)
+        for fn in sorted(files):
+            if _ignorable(fn) or fn.endswith(".TOO-BIG.txt"):
+                continue
+            src = os.path.join(base, fn)
+            try:
+                st = os.stat(src)
+            except OSError:
+                continue
+            if now - st.st_mtime < SETTLE_S:
+                continue                              # a medio escribir: la próxima pasada
+            if st.st_size == 0:
+                continue                              # vacío: probablemente recién creado
+            if st.st_size > MAX_INGEST:
+                aviso = src + ".TOO-BIG.txt"
+                if not os.path.exists(aviso):
+                    try:
+                        with open(aviso, "w", encoding="utf-8") as f:
+                            f.write(f"Not added to the library: {fn} is {st.st_size // (1024 * 1024)} MB "
+                                    f"and the limit is {MAX_INGEST // (1024 * 1024)} MB.\n")
+                    except OSError:
+                        pass
+                rechazados.append({"name": fn, "reason": "too big"})
+                continue
+            try:
+                with open(src, "rb") as f:
+                    data = f.read()
+            except OSError:
+                continue
+            h = sha256_bytes(data)
+            code, _ = docs_put(project_dir, h, data)
+            if code != 200:
+                rechazados.append({"name": fn, "reason": f"store failed ({code})"})
+                continue
+            # la carpeta virtual y TODOS sus prefijos (la web los lista así: "a", "a/b")
+            for i in range(1, len(parts) + 1):
+                p = "/".join(parts[:i])
+                if p not in dirs:
+                    dirs.append(p)
+            name = _nombre_libre(docs, _safe_component(fn) or h[:12], vdir)
+            last += 1
+            doc = {"id": last, "name": name, "mime": _mime_of(name), "size": len(data),
+                   "hash": h, "ts": int(now * 1000), "dir": vdir}
+            docs.append(doc)
+            agregados.append(doc)
+            try:
+                os.remove(src)
+            except OSError:
+                pass
+    if agregados:
+        manifest["lastId"] = last
+        manifest["type"] = "documents"
+    # carpetas de la bandeja que quedaron vacías: fuera (la raíz `inbox/` se deja)
+    for base, _subdirs, _files in sorted(os.walk(root), key=lambda t: -len(t[0])):
+        if base != root:
+            try:
+                os.rmdir(base)
+            except OSError:
+                pass
+    return agregados, rechazados
