@@ -69,7 +69,7 @@ DEFAULT_PORT = 8765
 # del orquestador necesitan la URL propia para hablarle al MCP del editor.
 PORT = DEFAULT_PORT
 NAME = "DiagraMinder"
-VERSION = "0.36.1"   # HTTPS con raíces aunque el Python no traiga (python.org en macOS)
+VERSION = "0.37.0"   # la bandeja de documentos + los modos del chat (aceptar todo / plan aprobado)
 
 # ===================== rutas / disco =====================
 
