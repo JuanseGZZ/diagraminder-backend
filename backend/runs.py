@@ -51,10 +51,39 @@ def set_status(run, status, error=None):
 
 PERM_TIMEOUT = 900      # 15 min sin respuesta = denegado (la CLI no puede esperar para siempre)
 
+# Los modos del chat que APRUEBAN SOLOS (2026-10-08). «Auto accept» se traducía a
+# `--permission-mode acceptEdits`, que en Claude Code solo aprueba EDICIONES: cada
+# comando seguía cayendo en este puente y preguntándole al usuario — el modo decía
+# «automático» y no lo era. Ahora el puente contesta él mismo, y lo deja a la vista
+# (evento `permission-auto`) en vez de tragárselo.
+AUTO_MODES = ("auto-edit", "auto")
+PLAN_TOOL = "ExitPlanMode"
+
+
+def _auto_motivo(run, tool):
+    """Por qué este pedido se aprueba sin preguntar, o None si hay que preguntar.
+    - «auto»: todo lo que pida.
+    - «plan», con el plan YA aprobado: lo que venga después (el usuario aprobó el
+      plan entero, no paso por paso). Probado contra el CLI real: tras aprobar
+      ExitPlanMode, Claude sigue en el mismo turno pero en modo normal, así que sin
+      esto pedía permiso para cada archivo del plan que ya se había aprobado.
+    El propio ExitPlanMode NUNCA se aprueba solo: aprobar el plan es del usuario."""
+    if tool == PLAN_TOOL:
+        return None
+    if run.get("mode") in AUTO_MODES:
+        return "auto"
+    if run.get("plan_approved"):
+        return "plan"
+    return None
+
 
 def perm_ask(run, tool, tool_input, tool_use_id):
     """Emite el pedido al chat y BLOQUEA hasta que el usuario conteste.
     Devuelve {"decision": "allow"|"deny", "input": {...}, "message": str}."""
+    motivo_auto = _auto_motivo(run, tool)
+    if motivo_auto:
+        emit(run, "permission-auto", tool=tool, input=tool_input, toolUseId=tool_use_id, reason=motivo_auto)
+        return {"decision": "allow", "input": tool_input}
     with RUNS_LOCK:
         run["_perm_n"] = run.get("_perm_n", 0) + 1
         pid = f"p{run['_perm_n']}"
@@ -73,6 +102,8 @@ def perm_ask(run, tool, tool_input, tool_use_id):
         emit(run, "permission-resolved", id=pid, decision="deny")
         return {"decision": "deny", "message": motivo}
     emit(run, "permission-resolved", id=pid, decision=ans.get("decision") or "deny")
+    if tool == PLAN_TOOL and ans.get("decision") == "allow":
+        run["plan_approved"] = True     # de acá en adelante, el plan corre sin preguntar
     return ans
 
 

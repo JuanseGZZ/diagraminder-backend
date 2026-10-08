@@ -25,7 +25,9 @@ def _self_cmd():
     server_py = os.path.join(os.path.dirname(os.path.abspath(__file__)), "server.py")
     return {"command": sys.executable, "args": [server_py, "--mcp-fs"]}
 
-# Modos del chat (web) → permission-mode de Claude Code.
+# Modos del chat (web) → permission-mode de Claude Code. «auto» sigue siendo
+# acceptEdits: lo que acceptEdits no cubre (comandos, MCP) lo aprueba el puente de
+# permisos (runs._auto_motivo), que además lo muestra en el chat.
 PERM_MODE = {
     "auto-edit": "acceptEdits",
     "auto": "acceptEdits",

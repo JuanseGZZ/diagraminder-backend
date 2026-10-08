@@ -2024,6 +2024,7 @@ class Handler(BaseHTTPRequestHandler):
         effort = body.get("effort")
 
         run = new_run()
+        run["mode"] = mode              # el puente de permisos lo mira (runs._auto_motivo)
         # cómo el subproceso MCP de permisos vuelve a hablarnos (claude.py lo cablea)
         run["local_url"] = f"http://{HOST}:{PORT}"
         run["local_token"] = get_token()

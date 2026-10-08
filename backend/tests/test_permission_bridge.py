@@ -184,5 +184,86 @@ check("si el backend no está, deniega (no cuelga la CLI)", out.get("behavior") 
 check("y explica por qué, para que el modelo no reintente al pedo",
       "permission" in (out.get("message") or "").lower(), str(out))
 
+
+print("\n### M. los modos que APRUEBAN SOLOS (2026-10-08)")
+# «Auto accept» se traducía a acceptEdits, que solo aprueba EDICIONES: cada comando
+# caía igual en una tarjeta. Y en «Plan», aprobado el plan, Claude vuelve a modo normal
+# (probado contra el CLI 2.1.263) y pedía permiso para cada archivo del plan aprobado.
+import threading as _th
+import runs as _runs
+
+
+def _run(mode=None):
+    r = _runs.new_run()
+    if mode:
+        r["mode"] = mode
+    return r
+
+
+def _eventos(r, kind):
+    return [e for e in r["events"] if e.get("kind") == kind]
+
+
+r = _run("auto-edit")
+t0 = time.time()
+ans = _runs.perm_ask(r, "Bash", {"command": "npm test"}, "toolu_a1")
+check("Auto accept: un COMANDO se aprueba solo, sin esperar a nadie",
+      ans.get("decision") == "allow" and time.time() - t0 < 0.5, str(ans))
+check("…con el input tal cual (la CLI exige updatedInput)", ans.get("input") == {"command": "npm test"})
+check("…y NO aparece una tarjeta: queda una línea `permission-auto` en el chat",
+      not _eventos(r, "permission") and _eventos(r, "permission-auto")
+      and _eventos(r, "permission-auto")[0].get("reason") == "auto", json.dumps(r["events"])[:200])
+check("el alias viejo `auto` hace lo mismo",
+      _runs.perm_ask(_run("auto"), "Bash", {"command": "x"}, "t").get("decision") == "allow")
+
+
+def _contestar_cuando_pregunte(r, decision):
+    """Contesta el PRÓXIMO pedido (uno nuevo, no el último que ya se resolvió). Si nadie
+    contesta, perm_ask espera PERM_TIMEOUT: por eso además se acorta abajo."""
+    antes = len(_eventos(r, "permission"))
+
+    def go():
+        for _ in range(250):
+            evs = _eventos(r, "permission")
+            if len(evs) > antes:
+                _runs.perm_answer(r, evs[-1]["id"], decision)
+                return
+            time.sleep(0.02)
+    _th.Thread(target=go, daemon=True).start()
+
+
+_runs.PERM_TIMEOUT = 5          # si un check falla, que falle rápido en vez de colgar 15 min
+
+
+r = _run("ask")
+_contestar_cuando_pregunte(r, "allow")
+ans = _runs.perm_ask(r, "Bash", {"command": "ls"}, "t")
+check("Preguntar antes: sale la TARJETA y espera la respuesta del usuario",
+      _eventos(r, "permission") and not _eventos(r, "permission-auto") and ans.get("decision") == "allow")
+
+r = _run("plan")
+_contestar_cuando_pregunte(r, "deny")
+ans = _runs.perm_ask(r, "ExitPlanMode", {"plan": "# Plan\n1. x"}, "t")
+check("Plan: el plan NUNCA se aprueba solo — va a la tarjeta",
+      _eventos(r, "permission") and _eventos(r, "permission")[0]["input"].get("plan", "").startswith("# Plan"))
+check("plan rechazado → lo que venga después SIGUE preguntando", not r.get("plan_approved"))
+_contestar_cuando_pregunte(r, "allow")
+_runs.perm_ask(r, "Write", {"file_path": "a.txt"}, "t")
+check("(y de hecho preguntó: una segunda tarjeta)", len(_eventos(r, "permission")) == 2)
+
+r = _run("plan")
+_contestar_cuando_pregunte(r, "allow")
+_runs.perm_ask(r, "ExitPlanMode", {"plan": "# Plan"}, "t")
+check("plan APROBADO → el run queda marcado", r.get("plan_approved") is True)
+ans = _runs.perm_ask(r, "Write", {"file_path": "b.txt"}, "t2")
+ans2 = _runs.perm_ask(r, "Bash", {"command": "npm test"}, "t3")
+check("…y todo lo que sigue corre sin preguntar (archivos Y comandos)",
+      ans.get("decision") == "allow" and ans2.get("decision") == "allow"
+      and len(_eventos(r, "permission")) == 1)
+check("…cada uno visible como «aprobado por el plan»",
+      [e.get("reason") for e in _eventos(r, "permission-auto")] == ["plan", "plan"])
+check("un run sin modo (orquestador, tests viejos) pregunta como siempre",
+      _runs._auto_motivo(_run(), "Bash") is None)
+
 print(f"\n=== RESULTADO: {ok} ok, {fail} fallidos ===")
 sys.exit(1 if fail else 0)
