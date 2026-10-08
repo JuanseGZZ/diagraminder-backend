@@ -2092,8 +2092,10 @@ class Handler(BaseHTTPRequestHandler):
     def _proxy_fetch(self, body):
         """Hace un request HTTP server-side y devuelve la respuesta. Lo usa el modo
         object para mandar fetches sin chocar con CORS (el browser no puede). Una
-        respuesta HTTP (incluido 4xx/5xx) es ok=True con su status/body; un error de
-        red/DNS es ok=False con el mensaje."""
+        respuesta HTTP (incluido 4xx/5xx) es ok=True con su status/body/headers; un
+        error de red/DNS es ok=False con el mensaje. Los `headers` (2026-10-08) los usa
+        el nodo WEB del canvas: X-Frame-Options / frame-ancestors dicen si el sitio se
+        deja mostrar en un iframe, y desde el navegador eso no se puede saber."""
         url = (body.get("url") or "").strip()
         method = (body.get("method") or "GET").upper()
         raw_headers = body.get("headers") or {}
@@ -2121,14 +2123,16 @@ class Handler(BaseHTTPRequestHandler):
             with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:
                 text = resp.read().decode("utf-8", errors="replace")
                 self._json(200, {"ok": True, "status": resp.status,
-                                 "statusText": getattr(resp, "reason", "") or "", "body": text})
+                                 "statusText": getattr(resp, "reason", "") or "", "body": text,
+                                 "headers": dict(resp.headers.items())})
         except urllib.error.HTTPError as e:
             try:
                 text = e.read().decode("utf-8", errors="replace")
             except Exception:
                 text = ""
             self._json(200, {"ok": True, "status": e.code,
-                             "statusText": getattr(e, "reason", "") or "", "body": text})
+                             "statusText": getattr(e, "reason", "") or "", "body": text,
+                             "headers": dict(e.headers.items()) if e.headers else {}})
         except Exception as e:
             self._json(200, {"ok": False, "error": str(e)})
 
