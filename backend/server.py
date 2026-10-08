@@ -49,7 +49,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
 # módulos desacoplados (ver claude.py / codex.py / gemini.py / cli_base.py / etc.)
-from util import safe_name, safe_file_name
+from util import safe_name, safe_file_name, ensure_ca_bundle
 from runs import (RUNS, RUNS_LOCK, SESSION_MAP, new_run, emit, set_status,
                   perm_ask, perm_answer)
 import docsfs
@@ -2078,6 +2078,7 @@ class Handler(BaseHTTPRequestHandler):
 
         try:
             req = urllib.request.Request(url, data=payload, method=method, headers=hdrs)
+            # el contexto por defecto: sus raíces las garantiza ensure_ca_bundle() en main()
             ctx = ssl.create_default_context()
             with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:
                 text = resp.read().decode("utf-8", errors="replace")
@@ -2206,6 +2207,9 @@ def _log_a_archivo():
 
 
 def main():
+    # Antes que nada que pueda hacer HTTPS: que el TLS tenga raíces (util.py explica
+    # por qué el Python de python.org en macOS arranca sin ninguna).
+    ensure_ca_bundle()
     # modo MCP (doc 27, fase 4): re-ejecución de este mismo binario/script como
     # MCP server stdio de fs para editores EXTERNOS (lo lanza Claude Code).
     if "--mcp-permission" in sys.argv:
