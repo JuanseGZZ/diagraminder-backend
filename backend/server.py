@@ -1873,6 +1873,23 @@ class Handler(BaseHTTPRequestHandler):
         if not name or tree_json is None:
             self._json(400, {"error": "faltan name/id o treeJson"})
             return
+        # `create` (create_diagram del MCP): un diagrama NUEVO. Sin esto el MCP solo
+        # podía editar lo que la web ya había creado. Va acá y no en el MCP porque la
+        # guarda "no pisar uno que ya existe" tiene que valer contra el disco real.
+        # Los mensajes van al MODELO → en inglés.
+        create = bool(body.get("create")) and origin != "web"
+        if create:
+            if os.path.exists(os.path.join(tree_dir(folder, name), "tree.json")):
+                self._json(422, {"error": f"a diagram named '{name}' already exists in folder '{folder}'"})
+                return
+            # Solo en una carpeta que la web ya conoce (tiene index.json): sin él,
+            # register_disk_project no puede darle id y la web nunca lo adoptaría.
+            if read_folder_index(folder).get("projects") is None:
+                hay = sorted(f for f in (os.listdir(projects_dir()) if os.path.isdir(projects_dir()) else [])
+                             if os.path.exists(os.path.join(folder_dir(f), "index.json")))
+                self._json(422, {"error": f"there is no folder '{folder}' in the app. "
+                                          f"Existing folders: {', '.join(hay) or '(none)'}"})
+                return
         tdir = tree_dir(folder, name)
         os.makedirs(tdir, exist_ok=True)
         text = tree_json if isinstance(tree_json, str) else json.dumps(tree_json, ensure_ascii=False, indent=2)
@@ -1906,8 +1923,14 @@ class Handler(BaseHTTPRequestHandler):
             seq = (prev or {}).get("seq", 0)
             if origin != "web":
                 # No lo escribió la web: hay que AVISARLE. Si no, este cambio no
-                # existe para ella y su próximo sync lo borra.
-                seq = _emit_state(folder, resolve_tree_id(folder, safe_name(name)), text)
+                # existe para ella y su próximo sync lo borra. Uno NUEVO va además
+                # registrado en el index.json y marcado `new`, que es lo que hace que
+                # la web lo adopte (stateMirror.adoptFromDisk) en vez de ignorarlo.
+                if create:
+                    pid, is_new = register_disk_project(folder, safe_name(name), text)
+                    seq = _emit_state(folder, pid, text, name=safe_name(name), is_new=is_new)
+                else:
+                    seq = _emit_state(folder, resolve_tree_id(folder, safe_name(name)), text)
             try:
                 STATE[key] = {"mtime": os.path.getmtime(fp), "seq": seq}
             except OSError:

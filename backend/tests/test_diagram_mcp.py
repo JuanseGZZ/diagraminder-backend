@@ -24,7 +24,7 @@ SERVER = os.path.join(BACKEND, "server.py")
 ok = fail = 0
 
 # Las del nivel "diagramas": las 4 de siempre + las 8 de memoria (diagram_memory.py)
-DIAGRAM_TOOLS = sorted(["diagram_schema", "list_diagrams", "read_diagram", "write_diagram",
+DIAGRAM_TOOLS = sorted(["diagram_schema", "list_diagrams", "read_diagram", "write_diagram", "create_diagram",
                         "memory_overview", "memory_search", "memory_read", "memory_add",
                         "memory_update", "memory_link", "memory_unlink", "memory_delete"])
 
@@ -117,7 +117,7 @@ try:
     check("initialize responde", (r.get("result") or {}).get("serverInfo", {}).get("name") == "diagraminder",
           json.dumps(r)[:120])
     tools = [t["name"] for t in (mcp.pedir("tools/list").get("result") or {}).get("tools", [])]
-    check("declara las 12 tools de diagramas (4 de JSON + 8 de memoria)",
+    check("declara las 13 tools de diagramas (5 de JSON + 8 de memoria)",
           sorted(tools) == DIAGRAM_TOOLS, str(tools))
 
     print("\n### B. ver lo que hay")
@@ -376,7 +376,7 @@ try:
     check("el rechazo dice DÓNDE prenderlo", "Settings" in txt, txt[:140])
 
     politica(enabled=True)
-    check("al prenderlo vuelven las 12 de diagramas", lista() == DIAGRAM_TOOLS, str(lista()))
+    check("al prenderlo vuelven las 13 de diagramas", lista() == DIAGRAM_TOOLS, str(lista()))
     txt, err = mcp.tool("read_diagram", {"name": "Mapa"})
     check("…y vuelve a funcionar", not err, txt[:100])
 
@@ -496,6 +496,52 @@ try:
           f"{len(eventos)} eventos: " + json.dumps(eventos)[:200])
     check("…y el texto que recibe el modelo no promete de más",
           "on screen" in txt, txt[:160])
+
+    print("\n### G1b. create_diagram: el MCP CREA, no solo edita (2026-10-08)")
+    # Antes un diagrama nuevo solo se podía crear desde la app: el agente dejaba el
+    # JSON "listo para cargar" y le pedía al usuario que lo creara a mano. La web ya
+    # adoptaba lo que aparecía en disco con `new` (stateMirror.adoptFromDisk); lo que
+    # faltaba era que /state/write lo registrara en el index.json y lo marcara así.
+    pdir = os.path.join(root, "Proyecto")
+    os.makedirs(pdir, exist_ok=True)
+    with open(os.path.join(pdir, "index.json"), "w", encoding="utf-8") as f:
+        json.dump({"projects": []}, f)                 # una carpeta que la web ya conoce
+    eventos.clear()
+    marca = "CANVAS-NUEVO-" + str(int(time.time() * 1000))
+    h = _th.Thread(target=_escuchar, daemon=True)
+    h.start()
+    time.sleep(0.8)
+    lienzo = {"type": "freestyle", "lastIdCharged": 0, "lastArrowId": 0, "lastShapeId": 0,
+              "attachments": {}, "nodos": [], "flechas": [], "formas": [], "marca": marca}
+    txt, err = mcp.tool("create_diagram", {"name": "Front", "folder": "Proyecto", "json": json.dumps(lienzo)})
+    check("create_diagram responde OK", not err, txt[:200])
+    h.join(timeout=8)
+    ev = next((e for e in eventos if marca in json.dumps(e)), None)
+    check("se EMITE por SSE marcado `new`, con su nombre (si no, la web no lo adopta)",
+          bool(ev) and ev.get("new") is True and ev.get("name") == "Front", json.dumps(ev)[:200])
+    idx = json.load(open(os.path.join(pdir, "index.json"), encoding="utf-8"))
+    reg = [p for p in idx["projects"] if p.get("name") == "Front"]
+    check("…queda en el index.json de la carpeta con el MISMO id que viajó",
+          len(reg) == 1 and reg[0].get("type") == "freestyle" and ev and reg[0]["id"] == ev.get("id"),
+          json.dumps(idx)[:200])
+    txt, err = mcp.tool("read_diagram", {"name": "Front", "folder": "Proyecto"})
+    check("y desde ahí se lee como cualquier otro", not err and json.loads(txt).get("marca") == marca, txt[:120])
+    txt, err = mcp.tool("create_diagram", {"name": "Front", "folder": "Proyecto", "json": json.dumps(lienzo)})
+    check("crear uno que YA existe se rechaza (no pisa: para eso está write_diagram)",
+          err and "already exists" in txt, txt[:160])
+    txt, err = mcp.tool("create_diagram", {"name": "Otro", "folder": "NoHay", "json": json.dumps(lienzo)})
+    check("una carpeta que la app no tiene se rechaza, diciendo cuáles hay",
+          err and "Proyecto" in txt and not os.path.exists(os.path.join(root, "NoHay")), txt[:160])
+    txt, err = mcp.tool("create_diagram", {"name": "Otro", "folder": "Proyecto",
+                                           "json": json.dumps({"type": "inventado"})})
+    check("un tipo inventado se rechaza antes de tocar el disco",
+          err and "cart" in txt and not os.path.exists(os.path.join(pdir, "Otro")), txt[:160])
+    # la web NO puede crear por este camino: `create` es solo para quien no es la web
+    st = urllib.request.urlopen(urllib.request.Request(
+        f"{base}/state/write?token={token}", headers={"Content-Type": "application/json"},
+        data=json.dumps({"folder": "Proyecto", "name": "Front", "treeJson": {"type": "freestyle"},
+                         "create": True}).encode(), method="POST"), timeout=10).status
+    check("sin origin (la web) `create` se ignora: sigue siendo el write de siempre", st == 200, str(st))
 
     mcp.cerrar()
 

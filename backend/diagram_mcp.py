@@ -91,6 +91,22 @@ TOOLS = [
              "json": {"type": "string", "description": "the COMPLETE tree.json"}},
             ["name", "json"]),
     },
+    {
+        "name": "create_diagram",
+        "description": (
+            "Creates a NEW diagram with the JSON you pass, and it appears in the user's app "
+            "LIVE, without reloading. Call diagram_schema for its type first and build the "
+            "JSON exactly to it: a diagram with invented fields opens EMPTY. `folder` must "
+            "be one the user already has (list_diagrams shows them); if omitted it goes to "
+            "the folder their diagrams are in, or 'Local'. The name must be new in that "
+            "folder — to change an existing diagram use write_diagram."
+        ),
+        "inputSchema": _schema(
+            {"name": _STR,
+             "folder": {"type": "string", "description": "an existing folder (optional)"},
+             "json": {"type": "string", "description": "the COMPLETE tree.json, with its `type`"}},
+            ["name", "json"]),
+    },
 ]
 
 # ---------------------------------------------------------------------------------
@@ -317,10 +333,60 @@ def call_tool(name, args):
                     "Changing the type would break it — keep it as it was."), True
         return _escribir(folder, nombre_real, obj, f"OK: '{nombre_real}' updated.")
 
+    if name == "create_diagram":
+        return _crear(args)
+
     if name in _NOMBRES_MEMORIA:
         return _memoria(name, args)
 
     return f"unknown tool: {name}", True
+
+
+def _tipos_con_esquema():
+    try:
+        import skills
+    except Exception:
+        return None
+    return {k.replace("diagramind-", "") for k in skills.SKILLS
+            if k.startswith("diagramind-") and k != "diagramind-format"}
+
+
+def _crear(args):
+    """create_diagram: lo nuevo va por el MISMO /state/write, con `create`. El backend
+    es el que se niega a pisar uno existente y el que lo registra para que la web lo
+    adopte: acá solo se valida lo que el modelo puede corregir solo."""
+    nombre = (args.get("name") or "").strip()
+    if not nombre:
+        return "`name` is required: the new diagram's name.", True
+    crudo = args.get("json")
+    if not crudo:
+        return ("`json` is required: the COMPLETE tree.json. Call diagram_schema for its "
+                "type and build it to that shape."), True
+    try:
+        obj = json.loads(crudo) if isinstance(crudo, str) else crudo
+    except json.JSONDecodeError as e:
+        return f"that is not valid JSON: {e}", True
+    tipos = _tipos_con_esquema() or set()
+    if not isinstance(obj, dict) or obj.get("type") not in tipos:
+        return (f"the JSON must be an object whose `type` is one of: {', '.join(sorted(tipos))}. "
+                "Call diagram_schema for that type."), True
+    carpeta = (args.get("folder") or "").strip()
+    if not carpeta:
+        todos, err = _proyectos()
+        if err:
+            return err, True
+        hay = {f for f, _, _ in todos}
+        carpeta = hay.pop() if len(hay) == 1 else "Local"
+    res, err = _api("/state/write", {"folder": carpeta, "name": nombre, "treeJson": obj,
+                                     "origin": "mcp", "create": True})
+    if err:
+        return err, True
+    if isinstance(res, dict) and not res.get("emitted"):
+        return (f"'{nombre}' was written to disk, but the app was NOT notified, so it "
+                "will not show up yet. Tell the user to reconnect the app."), True
+    return (f"OK: '{nombre}' ({obj['type']}) created in folder '{carpeta}'. The app was "
+            "notified and adds it to the user's diagram list. From now on use "
+            "read_diagram / write_diagram (or memory_*) with this name."), False
 
 
 def _escribir(folder, nombre_real, obj, hecho):

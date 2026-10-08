@@ -82,8 +82,9 @@ Paste it into `.mcp.json` in the root of your project. Claude Code can then read
 diagram before touching your code, and write back what it did and what is left —
 you see the canvas change live. In Claude Code, `/mcp` shows it connected.
 
-Four tools to work with a diagram as JSON: `list_diagrams`, `read_diagram`,
-`diagram_schema`, `write_diagram`.
+Five tools to work with a diagram as JSON: `list_diagrams`, `read_diagram`,
+`diagram_schema`, `write_diagram` and `create_diagram` (a new one, in one of your
+folders — it shows up in the app without reloading).
 
 And eight to use organigrams and canvases as a **memory**, a node at a time, without
 reading or rewriting the whole file: `memory_overview` (the map), `memory_search`,
