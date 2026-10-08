@@ -69,7 +69,7 @@ DEFAULT_PORT = 8765
 # del orquestador necesitan la URL propia para hablarle al MCP del editor.
 PORT = DEFAULT_PORT
 NAME = "DiagraMinder"
-VERSION = "0.36.0"   # el MCP crea diagramas (create_diagram)
+VERSION = "0.36.1"   # HTTPS con raíces aunque el Python no traiga (python.org en macOS)
 
 # ===================== rutas / disco =====================
 
