@@ -1174,7 +1174,7 @@ def make_adapter(ctx, node):
     provider = cred.get("provider") or ia.get("provider")
     key = cred.get("key")
     if provider == "anthropic":
-        return AnthropicChat(key, ia.get("model") or "claude-sonnet-5", ia.get("effort"))
+        return AnthropicChat(key, ia.get("model") or "claude-sonnet-5-5", ia.get("effort"))
     if provider == "google":
         return GeminiChat(key, ia.get("model") or "gemini-2.5-flash", ia.get("effort"))
     if provider == "openai":
