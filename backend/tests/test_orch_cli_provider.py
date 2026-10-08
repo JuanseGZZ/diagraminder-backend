@@ -10,9 +10,12 @@ Lo que este test cuida:
 - **Regresión de Claude Code**: su comando queda EXACTAMENTE como estaba antes del
   refactor. Es el único camino que ya corría en producción.
 - **Antigravity**: que se le pase lo que su binario acepta (system dentro del prompt,
-  `--conversation`, `--sandbox`) y NADA que no tenga (`--append-system-prompt`,
+  `--conversation`) y NADA que no tenga (`--append-system-prompt`,
   `--allowedTools`, `--mcp-config`) — un flag inventado lo mata al arrancar.
 - Que las guardas que no se pueden cumplir se rechacen ANTES de gastar un turno.
+- **El shell** (2026-10-08): un agente NO confinado tiene Bash/PowerShell SIEMPRE y
+  pre-aprobados; el confinado nunca (su shell es `fs_exec`). Antes iba atado a que algún
+  recurso tuviera permiso «ejecutar» y en la práctica quedaba sin Bash.
 
 No llama a ninguna API ni ejecuta ningún CLI: corre sin red.
 
@@ -53,7 +56,7 @@ def spec(**kw):
     s = {"node_id": "n1", "msg": "hacé X", "system": "YOU ARE THE ACCOUNTANT",
          "model": None, "effort": None, "add_dirs": [], "confinado": False,
          "mcp": {}, "mcp_env": {"url": "http://127.0.0.1:8765", "token": "tok"},
-         "exec_ok": False, "session": None}
+         "session": None}
     s.update(kw)
     return s
 
@@ -111,7 +114,7 @@ except OrchError as e:
 print("\n=== D. Claude Code: el comando no se movió (regresión) ===")
 claude = ORCH_CLIS["local"]
 cmd, cfg = claude.build("/bin/claude", spec(model="claude-opus-5", add_dirs=["/tmp/proj"],
-                                            session="sess-1", exec_ok=True))
+                                            session="sess-1"))
 check("lanza `-p` con el mensaje", cmd[1] == "-p" and cmd[2] == "hacé X", " ".join(cmd[:3]))
 check("el system va en --append-system-prompt",
       flag(cmd, "--append-system-prompt") == "YOU ARE THE ACCOUNTANT")
@@ -119,25 +122,31 @@ check("el modelo se mapea al alias del CLI", flag(cmd, "--model") == "opus", fla
 check("stream-json + verbose", "--output-format" in cmd and "--verbose" in cmd)
 check("--permission-mode acceptEdits", flag(cmd, "--permission-mode") == "acceptEdits")
 check("monta el recurso con --add-dir", flag(cmd, "--add-dir") == "/tmp/proj")
-check("con permiso «ejecutar» pre-aprueba el shell",
-      "Bash,PowerShell" in cmd, " ".join(cmd))
+check("sin confinar pre-aprueba el shell (Bash y PowerShell)",
+      flag(cmd, "--allowedTools") == "Bash,PowerShell", " ".join(cmd))
 check("retoma con --resume", flag(cmd, "--resume") == "sess-1")
 check("sin confinar no arma config MCP", cfg is None)
-cmd_noexec, _ = claude.build("/bin/claude", spec())
-check("sin permiso «ejecutar» le saca el shell",
-      "Bash" in cmd_noexec[cmd_noexec.index("--disallowedTools"):], " ".join(cmd_noexec))
-# La regresión de verdad: el comando ENTERO, no flag por flag. Este es el que corría en
-# producción antes de que el motor despachara por perfil; si alguien lo mueve, se entera acá.
-check("el comando completo quedó idéntico al de antes del refactor", cmd_noexec == [
+cmd_min, _ = claude.build("/bin/claude", spec())
+deny = lambda c: c[c.index("--disallowedTools") + 1:c.index("--allowedTools") if "--allowedTools" in c else None]
+check("sin confinar y SIN recursos igual tiene shell (era el bug: quedaba sin Bash)",
+      "Bash" not in deny(cmd_min) and flag(cmd_min, "--allowedTools") == "Bash,PowerShell",
+      " ".join(cmd_min))
+# La regresión de verdad: el comando ENTERO, no flag por flag. Si alguien lo mueve, se
+# entera acá. (Cambió a propósito el 2026-10-08: el shell ya no se niega sin confinar.)
+check("el comando completo es exactamente el esperado", cmd_min == [
     "/bin/claude", "-p", "hacé X", "--output-format", "stream-json", "--verbose",
     "--model", "sonnet", "--permission-mode", "acceptEdits",
     "--append-system-prompt", "YOU ARE THE ACCOUNTANT",
-    "--disallowedTools", "WebFetch", "WebSearch", "Bash", "PowerShell"], " ".join(cmd_noexec))
+    "--disallowedTools", "WebFetch", "WebSearch",
+    "--allowedTools", "Bash,PowerShell"], " ".join(cmd_min))
 cmd_conf, cfg_conf = claude.build("/bin/claude", spec(confinado=True, add_dirs=["/tmp/d"],
                                                       mcp={"dmfs7": {"projectId": "p7", "perm": 2}}))
 check("confinado arma el --mcp-config", cfg_conf is not None and "--mcp-config" in cmd_conf)
 check("y la whitelist nombra las tools del MCP",
       "mcp__dmfs7__fs_exec" in flag(cmd_conf, "--allowedTools"), flag(cmd_conf, "--allowedTools"))
+check("confinado NO tiene el shell nativo (su shell es fs_exec)",
+      "Bash" in cmd_conf[cmd_conf.index("--disallowedTools"):] and
+      "Bash" not in flag(cmd_conf, "--allowedTools"), " ".join(cmd_conf))
 if cfg_conf:
     os.remove(cfg_conf)
 cmd_eff, _ = claude.build("/bin/claude", spec(effort="high"))
@@ -156,9 +165,7 @@ check("retoma con --conversation (no --resume)",
       flag(cmd, "--conversation") == "conv-9" and "--resume" not in cmd)
 check("modo accept-edits + saltear permisos (headless no puede aprobar)",
       flag(cmd, "--mode") == "accept-edits" and "--dangerously-skip-permissions" in cmd)
-check("sin permiso «ejecutar» va con --sandbox", "--sandbox" in cmd)
-check("con permiso «ejecutar» NO va --sandbox",
-      "--sandbox" not in agy.build("/bin/agy", spec(exec_ok=True))[0])
+check("sin --sandbox: no confinado = terminal de verdad, como Claude Code", "--sandbox" not in cmd)
 check("no arma config MCP (no tiene)", cfg is None)
 for f in ("--append-system-prompt", "--allowedTools", "--disallowedTools", "--mcp-config",
           "--permission-mode", "--verbose"):

@@ -2137,19 +2137,18 @@ def _cli_org_dir(ctx, node):
 
 def _cli_resource_notes(ctx, graph, node):
     """Cómo llega un agente CLI a sus recursos (decisión X). Devuelve
-    (notas, add_dirs, mcp, exec_ok):
+    (notas, add_dirs, mcp):
 
     - `confinado` OFF → **tools nativas con los --add-dir acotados**: solo la carpeta
       real de SUS editores y el subdirectorio de SUS diagramas. Conserva Read/Write/
-      Bash (codea bien), pero no ve el resto de la carpeta.
+      Bash —siempre, desde 2026-10-08— (codea bien), pero no ve el resto de la carpeta.
     - `confinado` ON → **todo por el MCP del editor**: un server `dmfs<id>` por editor
       contra ESTE backend, así cada escritura pasa por `editorfs` con su chequeo
-      "path escapes target", igual que un agente API. Sin --add-dir para editores.
-
-    `exec_ok` es True si ALGÚN recurso tiene permiso `ejecutar`: si no, se le saca Bash.
+      "path escapes target", igual que un agente API. Sin --add-dir para editores. Su
+      shell es `fs_exec`, y solo en los recursos con permiso `ejecutar`.
     """
     confinado = bool((node.get("data") or {}).get("confinado"))
-    notes, add_dirs, mcp, exec_ok = [], [], {}, False
+    notes, add_dirs, mcp = [], [], {}
     for r in resources_of(graph, node["id"]):
         ref = _res_ref(ctx, r)
         if not ref:
@@ -2157,7 +2156,6 @@ def _cli_resource_notes(ctx, graph, node):
         rpid = ref["key"]
         perm = (r["data"] or {}).get("permiso") or "editar"
         lvl = PERM_LEVEL.get(perm, 1)
-        exec_ok = exec_ok or lvl >= 2
         if _res_is_files(ref):
             target = editorfs.get_target(ctx["app_dir"], rpid)
             if not target:
@@ -2193,7 +2191,7 @@ def _cli_resource_notes(ctx, graph, node):
     org = _cli_org_dir(ctx, node)
     if org and org not in add_dirs:
         add_dirs.append(org)
-    return notes, add_dirs, mcp, exec_ok
+    return notes, add_dirs, mcp
 
 
 def _has_editor(ctx, graph, node_id):
@@ -2206,9 +2204,8 @@ def _has_editor(ctx, graph, node_id):
     return False
 
 
-def _cli_system(ctx, graph, node, notes, exec_ok=False):
-    """System prompt de una cabeza CLI. Va al MODELO → en inglés (doc 20 §L).
-    `exec_ok` = algún recurso suyo tiene permiso `ejecutar` ⇒ tiene shell."""
+def _cli_system(ctx, graph, node, notes):
+    """System prompt de una cabeza CLI. Va al MODELO → en inglés (doc 20 §L)."""
     d = node.get("data") or {}
     any_editor = _has_editor(ctx, graph, node["id"])
     partes = [
@@ -2313,20 +2310,14 @@ def _cli_system(ctx, graph, node, notes, exec_ok=False):
         reglas.insert(1, "All file work happens INSIDE your editor resources: they are "
                          "the only place where you can write and where the user can review and "
                          "undo what you did. Do not create files anywhere else.")
-    # El SHELL (Bash en POSIX, PowerShell en Windows) va atado al permiso `ejecutar`, y
-    # hay que decirle cuál de los dos mundos le toca: sin esto, un tester sin `ejecutar`
-    # se pasaba el turno probando variantes del comando y terminaba pidiendo permisos.
+    # El SHELL (Bash en POSIX, PowerShell en Windows): un agente no confinado lo tiene
+    # SIEMPRE y pre-aprobado (orch_cli.ClaudeOrch.build). Se le dice igual: sin esto el
+    # modelo duda, o deja un server en primer plano y el turno se cuelga.
     if not d.get("confinado"):
         partes.append(
             "YOU HAVE A REAL SHELL (Bash / PowerShell), pre-approved: run tests, builds, servers, "
             "git, curl — whatever the job needs. Long-running processes (a server) have to go to the "
-            "BACKGROUND, or the turn hangs until the timeout."
-            if exec_ok else
-            "YOU HAVE NO SHELL: Bash/PowerShell are DISABLED for you because none of your resources "
-            "has the `ejecutar` permission. You cannot run tests, builds, servers or curl, and there "
-            "is no way around it (no dialog, nobody to approve it). Don't waste turns trying variants: "
-            "if the task needs to RUN something, use `CONTROL: {\"action\":\"ask_user\","
-            "\"question\":\"...\"}` and ask for the resource's permission to be raised to `ejecutar`.")
+            "BACKGROUND, or the turn hangs until the timeout.")
     partes.append("RULES: " + " ".join(f"{i}) {r}" for i, r in enumerate(reglas, 1)))
     partes.append(CLI_PROTOCOL)
     return "\n\n".join(partes)
@@ -2379,8 +2370,8 @@ def _cli_cmd(ctx, graph, node, frame, message, cli_bin, cli=None):
     cli = cli or ORCH_CLIS["local"]
     d = node.get("data") or {}
     confinado = bool(d.get("confinado"))
-    notes, add_dirs, mcp, exec_ok = _cli_resource_notes(ctx, graph, node)
-    system = _cli_system(ctx, graph, node, notes, exec_ok)
+    notes, add_dirs, mcp = _cli_resource_notes(ctx, graph, node)
+    system = _cli_system(ctx, graph, node, notes)
     ia = d.get("ia") or {}
     cwd = _cli_workspace(ctx, node["id"])
     try:
@@ -2400,7 +2391,6 @@ def _cli_cmd(ctx, graph, node, frame, message, cli_bin, cli=None):
         "mcp": mcp,
         "mcp_env": {"url": ctx.get("local_url") or "http://127.0.0.1:8765",
                     "token": ctx.get("local_token") or ""},
-        "exec_ok": exec_ok,
         "session": frame.get("sessionId"),
     }
     cmd, cfg = cli.build(cli_bin, spec)
@@ -3172,7 +3162,7 @@ def inspect_node(ctx, node_id):
         # --conversation), no acá: por eso los frames CLI no tienen `messages`.
         cli_prof = ORCH_CLIS.get(provider) or ORCH_CLIS["local"]
         confinado = bool(d.get("confinado"))
-        notes, add_dirs, mcp, exec_ok = _cli_resource_notes(ctx, graph, node)
+        notes, add_dirs, mcp = _cli_resource_notes(ctx, graph, node)
         cwd = _cli_workspace(ctx, node["id"])
         refs = []
         if confinado:
@@ -3203,7 +3193,7 @@ def inspect_node(ctx, node_id):
                                   "version — this is a reference. What the engine does fix are the "
                                   "flags: --permission-mode acceptEdits and --disallowedTools."),
                          "tools": [{"name": n, "description": de, "schema": {},
-                                    "disabled": n in CLI_DISALLOWED or (n in CLI_SHELL_TOOLS and not exec_ok)}
+                                    "disabled": n in CLI_DISALLOWED}
                                    for n, de in CLI_NATIVE_TOOLS]})
         else:
             # un CLI sin --allowedTools/--disallowedTools: el motor NO puede apagarle
@@ -3212,8 +3202,7 @@ def inspect_node(ctx, node_id):
             refs.append({"origin": "cli", "label": f"{cli_prof.label} native tools",
                          "note": (f"{cli_prof.label} has no per-tool flags, so the engine cannot turn "
                                   "individual tools off: the agent keeps its whole toolbelt, bounded "
-                                  "by its --add-dir. Without a resource holding the «ejecutar» "
-                                  "permission it runs with --sandbox (restricted terminal)."),
+                                  "by its --add-dir, shell included."),
                          "tools": []})
         refs.append({"origin": "skills", "label": "Skills installed in its workspace",
                      "note": (("`install_skills` writes them to <workspace>/.claude/skills/ before "
@@ -3226,9 +3215,9 @@ def inspect_node(ctx, node_id):
         # sin flags por tool (agy) el motor no apaga ninguna: decirlo vacío es lo honesto
         off = ([] if not cli_prof.can_confine else
                list(CLI_DISALLOWED) + list(CLI_SHELL_TOOLS) if confinado else
-               list(CLI_DISALLOWED) + ([] if exec_ok else list(CLI_SHELL_TOOLS)))
+               list(CLI_DISALLOWED))
         base.update({
-            "system": _cli_system(ctx, graph, node, notes, exec_ok),
+            "system": _cli_system(ctx, graph, node, notes),
             "systemNote": (("Passed as --append-system-prompt ON EVERY TURN, whole."
                             if cli_prof.can_confine else
                             f"{cli_prof.label} has no --append-system-prompt: it goes at the TOP OF "
@@ -3252,22 +3241,17 @@ def inspect_node(ctx, node_id):
                                     "Memory is off: every delegation starts a new session."),
                     "confinado": confinado, "permissionMode": "acceptEdits",
                     "disallowed": off,
-                    "execOk": exec_ok,
-                    # el shell son DOS tools (Bash POSIX / PowerShell Windows) y va atado
-                    # al permiso `ejecutar`: con él se PRE-APRUEBAN (acceptEdits aprueba
-                    # ediciones, no comandos: sin esto headless los deniega uno por uno)
-                    "shell": {"tools": list(CLI_SHELL_TOOLS), "preApproved": bool(exec_ok and not confinado),
+                    # el shell son DOS tools (Bash POSIX / PowerShell Windows). Sin confinar
+                    # las tiene siempre y PRE-APROBADAS (acceptEdits aprueba ediciones, no
+                    # comandos: sin esto headless los deniega uno por uno)
+                    "shell": {"tools": list(CLI_SHELL_TOOLS), "preApproved": not confinado,
                               "note": ("Its shell is `fs_exec` through the editor's MCP (with the "
                                        "«ejecutar» permission); the native ones are denied."
                                        if confinado else
-                                       "Pre-approved with --allowedTools because a resource of its own has "
-                                       "the «ejecutar» permission: --permission-mode acceptEdits only "
-                                       "auto-approves file EDITS, so without this every command it runs "
-                                       "gets auto-denied (headless = there is no dialog to approve)."
-                                       if exec_ok else
-                                       "Denied: no resource of its own has the «ejecutar» permission, so it "
-                                       "cannot run tests, builds or servers. Raise a resource to «ejecutar» "
-                                       "if it has to.")},
+                                       "Pre-approved with --allowedTools: an agent that is not confined "
+                                       "always has a shell. --permission-mode acceptEdits only auto-approves "
+                                       "file EDITS, so without this every command it runs gets auto-denied "
+                                       "(headless = there is no dialog to approve).")},
                     # director con cabeza CLI: edita el organigrama como archivo, así que
                     # su directorio va montado (si no, el CLI headless le DENIEGA el path
                     # y el agente termina pidiendo un permiso que nadie puede aprobar)
@@ -3280,9 +3264,9 @@ def inspect_node(ctx, node_id):
                         if confinado else
                         "Not confined: it uses its native tools, limited to the --add-dir below — "
                         "only the resources you wired. Careful: --add-dir does not distinguish "
-                        "read from write (a 'leer' resource is not mounted) and the shell can escape "
-                        "them, which is why it only has Bash/PowerShell if one of its resources is "
-                        "'ejecutar'.")},
+                        "read from write (a 'leer' resource is not mounted), and it has a real shell "
+                        "(Bash/PowerShell), which can reach beyond them. If that is too much, turn "
+                        "on «confined».")},
         })
         return base
 

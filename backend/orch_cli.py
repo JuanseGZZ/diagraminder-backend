@@ -45,7 +45,7 @@ MCP_FS_EXEC = ["fs_exec"]
 CLI_DIAGRAM_TOOLS = ["Read", "Write", "Edit", "Glob", "Grep"]
 # el shell de Claude Code son DOS tools según el sistema: `Bash` (POSIX) y `PowerShell`
 # (Windows). Nombrar solo Bash dejaba el shell abierto en Windows — y al revés, la
-# pre-aprobación del permiso `ejecutar` tiene que cubrir las dos.
+# pre-aprobación del agente no confinado tiene que cubrir las dos.
 CLI_SHELL_TOOLS = ["Bash", "PowerShell"]
 CLI_DISALLOWED = ["WebFetch", "WebSearch"]
 
@@ -157,18 +157,16 @@ class ClaudeOrch:
             # shell nativo a mano. Se lo negamos explícitamente — su shell es `fs_exec`.
             cmd += ["--disallowedTools"] + CLI_DISALLOWED + CLI_SHELL_TOOLS
         else:
-            # blacklist: conserva su toolbelt nativo, acotado por los --add-dir de arriba.
-            # El shell es la vía de escape de los --add-dir, así que se lo damos SOLO si algún
-            # recurso suyo tiene permiso `ejecutar` — y son DOS tools (Bash y PowerShell:
-            # nombrar solo Bash dejaba el shell abierto en Windows).
-            off = list(CLI_DISALLOWED) + ([] if s["exec_ok"] else list(CLI_SHELL_TOOLS))
-            cmd += ["--disallowedTools"] + off
-            if s["exec_ok"]:
-                # tener la tool no alcanza: `acceptEdits` auto-aprueba las EDICIONES, no los
-                # comandos, así que headless cada comando que no sea de solo-lectura se
-                # auto-DENIEGA (un tester no podía ni levantar su server). El permiso
-                # `ejecutar` es justamente "puede correr comandos" ⇒ se pre-aprueban.
-                cmd += ["--allowedTools", ",".join(CLI_SHELL_TOOLS)]
+            # blacklist: conserva su toolbelt nativo ENTERO, shell incluido, acotado por los
+            # --add-dir de arriba. Hasta 2026-10-08 el shell iba atado a que algún recurso
+            # tuviera permiso `ejecutar`, y en la práctica un agente no confinado quedaba
+            # sin Bash y no podía ni correr un test. Decisión del usuario: el interruptor de
+            # seguridad es `confinado` — quien no lo está, tiene shell. Son DOS tools (Bash y
+            # PowerShell: nombrar solo Bash dejaba el shell afuera en Windows), y hay que
+            # PRE-APROBARLAS: `acceptEdits` auto-aprueba las ediciones, no los comandos, así
+            # que headless cada comando se auto-denegaría.
+            cmd += ["--disallowedTools"] + list(CLI_DISALLOWED)
+            cmd += ["--allowedTools", ",".join(CLI_SHELL_TOOLS)]
         if s.get("session"):
             cmd += [self.resume_flag, str(s["session"])]
         return cmd, cfg
@@ -191,8 +189,8 @@ class ClaudeOrch:
                 hit = denied_text(b)
                 if hit:
                     why, txt = hit
-                    head = ("cli COMMAND denied (headless: no dialog to approve; a command needs a "
-                            "resource with the «ejecutar» permission)" if why == "cmd" else
+                    head = ("cli COMMAND denied (headless: no dialog to approve; a confined agent "
+                            "runs commands only through fs_exec)" if why == "cmd" else
                             "cli permission DENIED (headless: nobody can approve it — the path is "
                             "outside its --add-dir)")
                     log(f"{head}: {txt[:200]}", full=txt)
@@ -250,11 +248,8 @@ class AgyOrch:
                "--disable-slash-commands"]       # el prompt es del usuario: que un "/" no expanda nada
         for x in s["add_dirs"]:
             cmd += ["--add-dir", x]
-        # No se le puede quitar el shell (no hay --disallowedTools). `--sandbox` es lo más
-        # parecido que ofrece el binario: restringe la terminal. Se usa cuando NINGÚN
-        # recurso tiene permiso `ejecutar`, que es el caso en que a Claude se le saca Bash.
-        if not s["exec_ok"]:
-            cmd += ["--sandbox"]
+        # Sin `--sandbox`: agy nunca corre confinado (no tiene con qué), y un agente no
+        # confinado tiene shell — lo mismo que Claude Code (ver ClaudeOrch.build).
         if s.get("session"):
             cmd += [self.resume_flag, str(s["session"])]
         return cmd, None
