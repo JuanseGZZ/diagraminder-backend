@@ -162,7 +162,6 @@ SKILLS = dict([
         "| `basic` | yes | **NO** | Only the title is drawn. A `contenido` here is "
         "invisible: use it for a label, never for content. |\n"
         "| `grupo` | yes (if any) | yes (if any) | A SECTOR that groups other nodes. |\n"
-        "| `web` | yes | as a URL | Embeds that page in an iframe. |\n"
         "| `class` | yes | no | UML-style class box; the fields live in `data`. |\n"
         "| `media` | yes | no | Image or video; the URL goes in `data.src`. |\n"
         "| `shape` | yes (as the label) | no | A geometric shape that CONNECTS like any node. |\n"

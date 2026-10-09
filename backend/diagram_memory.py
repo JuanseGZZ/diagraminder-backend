@@ -456,6 +456,8 @@ class _Canvas:
 
     def texto(self, n):
         tipo = n.get("type") or "basic"
+        # `web` ya no se crea (el nodo se borró el 2026-10-08), pero queda en canvas
+        # viejos: la llave se deja y la web lo dibuja como tarjeta básica.
         if tipo == "web":
             return f"(web page: {n.get('contenido') or ''})"
         if tipo == "class":
