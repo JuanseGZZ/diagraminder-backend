@@ -124,12 +124,34 @@ class ClaudeOrch:
             cmd += ["--add-dir", x]
 
         cfg = None
+        # los repos de GitHub (doc 28 §GitHub): un MCP `dmgh<id>` por nodo, confinado o no.
+        # Habla con /gh/call de este backend con el token LOCAL; el de GitHub no sale de ahí.
+        gh_servers, gh_allowed = {}, []
+        for name, info in (s["mcp"] or {}).items():
+            if info.get("kind") != "gh":
+                continue
+            gh_servers[name] = {
+                **_self_cmd("--mcp-gh"),
+                "env": {"DMGH_URL": s["mcp_env"]["url"], "DMGH_TOKEN": s["mcp_env"]["token"],
+                        "DMGH_PROJECT": s.get("project_id") or "", "DMGH_NODE": str(info["nodeId"])},
+            }
+            gh_allowed += [f"mcp__{name}__{t}" for t in info["tools"]]
+
+        def _write_cfg(servers):
+            fd, path = tempfile.mkstemp(prefix=f"dmorch-mcp-{s['node_id']}-", suffix=".json")
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump({"mcpServers": servers}, f)
+            os.chmod(path, 0o600)         # tiene el token del backend local
+            return path
+
         if s["confinado"]:
             # whitelist: SOLO las tools del MCP (una por editor, según permiso) y, si tiene
             # diagramas cableados —o es un director, que alcanza su organigrama—, las nativas
             # de archivo, que solo llegan a sus add_dirs.
-            servers, allowed = {}, []
+            servers, allowed = dict(gh_servers), list(gh_allowed)
             for name, info in (s["mcp"] or {}).items():
+                if info.get("kind") == "gh":
+                    continue
                 servers[name] = {
                     **_self_cmd(),
                     "env": {"DMFS_URL": s["mcp_env"]["url"], "DMFS_TOKEN": s["mcp_env"]["token"],
@@ -144,10 +166,7 @@ class ClaudeOrch:
             if s["add_dirs"]:
                 allowed += CLI_DIAGRAM_TOOLS
             if servers:
-                fd, cfg = tempfile.mkstemp(prefix=f"dmorch-mcp-{s['node_id']}-", suffix=".json")
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    json.dump({"mcpServers": servers}, f)
-                os.chmod(cfg, 0o600)      # tiene el token del backend local
+                cfg = _write_cfg(servers)
                 cmd += ["--mcp-config", cfg]
             # sin tools permitidas el agente no puede hacer NADA con archivos: igual puede
             # razonar y responder, que es lo correcto para un nodo sin recursos cableados.
@@ -166,7 +185,10 @@ class ClaudeOrch:
             # PRE-APROBARLAS: `acceptEdits` auto-aprueba las ediciones, no los comandos, así
             # que headless cada comando se auto-denegaría.
             cmd += ["--disallowedTools"] + list(CLI_DISALLOWED)
-            cmd += ["--allowedTools", ",".join(CLI_SHELL_TOOLS)]
+            cmd += ["--allowedTools", ",".join(CLI_SHELL_TOOLS + gh_allowed)]
+            if gh_servers:
+                cfg = _write_cfg(gh_servers)
+                cmd += ["--mcp-config", cfg]
         if s.get("session"):
             cmd += [self.resume_flag, str(s["session"])]
         return cmd, cfg

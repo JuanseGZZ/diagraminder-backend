@@ -53,6 +53,7 @@ import subprocess
 import tempfile
 
 import editorfs
+import ghrepo
 import sourcever
 from orch_cli import (CLI_DIAGRAM_TOOLS, CLI_DISALLOWED, CLI_SHELL_TOOLS, MCP_FS_EXEC,
                       MCP_FS_READ, MCP_FS_WRITE, ORCH_CLIS, CliTurnError)
@@ -333,7 +334,7 @@ def keys_write(ctx, patch):
     Las de los modelos van por cred_write/cred_delete."""
     keys = keys_read(ctx)
     for prov, val in (patch or {}).items():
-        if not str(prov).startswith("mcp:"):
+        if not str(prov).startswith(("mcp:", "gh:")):
             continue
         empty = not val or (isinstance(val, dict) and not (val.get("key") or val.get("url")))
         if empty:
@@ -358,12 +359,13 @@ def keys_status(ctx):
     creds = [{"id": c.get("id"), "nombre": c.get("nombre") or "", "provider": c.get("provider"),
               "url": c.get("url") or "", "hint": _key_hint(c.get("key") or "")}
              for c in creds_of(keys)]
-    mcp = {}
+    mcp, gh = {}, {}
     for k, v in keys.items():
-        if str(k).startswith("mcp:"):
-            mcp[str(k).split(":", 1)[1]] = {"set": bool((v or {}).get("key")),
-                                            "hint": _key_hint((v or {}).get("key") or "")}
-    return {"creds": creds, "keys": {"mcp": mcp}}
+        for pref, dest in (("mcp:", mcp), ("gh:", gh)):
+            if str(k).startswith(pref):
+                dest[str(k).split(":", 1)[1]] = {"set": bool((v or {}).get("key")),
+                                                 "hint": _key_hint((v or {}).get("key") or "")}
+    return {"creds": creds, "keys": {"mcp": mcp, "gh": gh}}
 
 
 # ===================== MCP / API EXTERNAS (decisión V — salida, fase 6c) =====================
@@ -731,9 +733,12 @@ def _after_run(ctx, run):
 
 # ===================== grafo =====================
 
-NODE_TYPES = {"agAgent", "agResource", "agTask", "agDept", "agWebhook", "agMcp",
-              "agData"}
+# agFolder faltaba desde F3 (doc 37): un director que editaba un organigrama con una
+# carpeta recibía «invalid node type: agFolder» y no podía guardar nada.
+NODE_TYPES = {"agAgent", "agResource", "agFolder", "agGithub", "agTask", "agDept", "agWebhook",
+              "agMcp", "agData"}
 ARROW_OK = {("delega", "agAgent", "agAgent"), ("usa", "agAgent", "agResource"),
+            ("usa", "agAgent", "agFolder"), ("usa", "agAgent", "agGithub"),
             ("usa", "agAgent", "agMcp"), ("task", "agTask", "agAgent"),
             ("trigger", "agWebhook", "agAgent"),
             ("contexto", "agAgent", "agData")}
@@ -826,6 +831,8 @@ def resources_of(graph, node_id):
             if r.get("type") == "agResource" and d.get("projectId"):
                 out.append(r)
             elif r.get("type") == "agFolder" and d.get("path"):
+                out.append(r)
+            elif r.get("type") == "agGithub" and ghrepo.parse_repo(d.get("repo")):
                 out.append(r)
     return out
 
@@ -1249,6 +1256,10 @@ def _res_ref(ctx, r):
     if r.get("type") == "agFolder":
         return {"kind": "folder", "key": f"{ctx['pid']}#{r['id']}",
                 "name": r.get("titulo") or data.get("path") or "folder", "type": "folder"}
+    if r.get("type") == "agGithub":
+        repo = ghrepo.parse_repo(data.get("repo"))
+        return {"kind": "repo", "key": f"{ctx['pid']}#{r['id']}", "repo": repo,
+                "name": r.get("titulo") or repo, "type": "github"}
     pid = data.get("projectId")
     meta = ctx["project_meta"](pid)
     if not meta:
@@ -1257,15 +1268,16 @@ def _res_ref(ctx, r):
 
 
 def _res_is_files(ref):
-    """¿este recurso da herramientas de ARCHIVOS (y no de diagrama)?"""
-    return ref["kind"] == "folder"
+    """¿este recurso da herramientas de ARCHIVOS (y no de diagrama)? Un repo de GitHub
+    también: su clon es una carpeta más, con las tools de carpeta de siempre."""
+    return ref["kind"] in ("folder", "repo")
 
 
 def _sv_dir(ctx, ref):
     """Dónde vive el historial de versiones del recurso. El de un proyecto va DENTRO
     del proyecto (viaja con él); el de una carpeta-nodo va en el directorio del
     orquestador, que es de quien depende el nodo."""
-    if ref["kind"] == "folder":
+    if ref["kind"] in ("folder", "repo"):
         return os.path.join(orch_dir(ctx["app_dir"], ctx["pid"]),
                             "source-versions", ref["key"].split("#")[-1])
     return ctx["sv_dir_of"](ref["key"])
@@ -1280,6 +1292,19 @@ def resource_tools(ctx, graph, node_id, author):
         ref = _res_ref(ctx, r)
         if not ref:
             notes.append(f"- {rid}: (project deleted — do not use)")
+            continue
+        if ref["kind"] == "repo":
+            err = gh_prepare(ctx, r)
+            if err:
+                notes.append(f"- {rid}: GitHub repo {ref['repo']} — NOT available: {err}. Tell the human.")
+                continue
+            g = gh_node(ctx, r)
+            notes.append(f"- {rid}: GitHub repo {ref['repo']} (permission {r['data'].get('permiso')}"
+                         f"{', may merge and push to the main branch' if g['merge'] else ''}): a local clone. "
+                         f"Edit its files with the {rid}_fs_* tools; for git and GitHub use the "
+                         f"{rid}_git_* / {rid}_gh_* tools (credentials are handled for you).")
+            _editor_tools(ctx, rid, ref["key"], _sv_dir(ctx, ref), perm, tools, execs, author)
+            _github_tools(ctx, rid, r, tools, execs, author)
             continue
         notes.append(f"- {rid}: {ref['name']} ({ref['type']}, permission {r['data'].get('permiso')})")
         if _res_is_files(ref):
@@ -1350,6 +1375,80 @@ def _editor_tools(ctx, rid, rpid, sv_dir, perm, tools, execs, author):
         add("fs_exec", _s("Runs a shell command in the project (60s timeout).",
                           {"cmd": {"type": "string"}}, ["cmd"]),
             lambda i: _fs(editorfs.fs_exec, app, rpid, i.get("cmd")))
+
+
+# ===================== GITHUB (agGithub, doc 28 §GitHub) =====================
+# Un repo de GitHub como recurso: el backend lo clona en <orch>/<pid>/repos/<nodo> y
+# lo registra en editorfs con la misma clave que un agFolder (`<pid>#<nodo>`), así los
+# ARCHIVOS van por las tools de carpeta de siempre. Lo REMOTO va por ghrepo.TOOLS con el
+# token del nodo (keys.json `gh:<nodo>`), que el modelo no ve nunca.
+
+def gh_clone_dir(ctx, node_id):
+    return os.path.join(orch_dir(ctx["app_dir"], ctx["pid"]), "repos", str(int(node_id)))
+
+
+def gh_node(ctx, r):
+    """Lo que hace falta para operar el repo de un nodo agGithub."""
+    d = r.get("data") or {}
+    tok = ((keys_read(ctx).get(f"gh:{r['id']}") or {}).get("key") or "")
+    return {"path": gh_clone_dir(ctx, r["id"]), "repo": ghrepo.parse_repo(d.get("repo")),
+            "token": tok, "perm": d.get("permiso") or "editar", "merge": bool(d.get("merge"))}
+
+
+def gh_prepare(ctx, r):
+    """Clona (si falta) y registra el target. Devuelve None o el motivo por el que el
+    repo no se puede usar — que va a las notas del agente, no a un crash del turno."""
+    g = gh_node(ctx, r)
+    if not g["repo"]:
+        return "no repository set in the node"
+    if not g["token"]:
+        return "the node has no GitHub token yet"
+    try:
+        ghrepo.clone(g["path"], g["repo"], g["token"])
+    except ghrepo.GhError as e:
+        return e.msg
+    code, out = editorfs.set_target(ctx["app_dir"], f"{ctx['pid']}#{r['id']}", g["path"])
+    return None if code < 400 else out.get("error")
+
+
+def gh_find(ctx, graph, node_id):
+    n = graph["nodos"].get(int(node_id))
+    if not n or n.get("type") != "agGithub":
+        raise OrchError(404, f"node {node_id} is not a GitHub node")
+    return n
+
+
+def gh_call(ctx, graph, node_id, tool, args, author):
+    """Una tool de GitHub sobre el nodo. La usan el agente API (por su executor) y el
+    MCP de las cabezas CLI (por /gh/call): UN despacho, así no se separan."""
+    r = gh_find(ctx, graph, node_id)
+    g = gh_node(ctx, r)
+    if not g["repo"]:
+        raise OrchError(400, "this GitHub node has no repository set")
+    err = gh_prepare(ctx, r)
+    if err:
+        raise OrchError(400, err)
+    try:
+        return ghrepo.run_tool(tool, args, path=g["path"], repo=g["repo"], token=g["token"],
+                               perm=g["perm"], merge=g["merge"], author=author)
+    except ghrepo.GhError as e:
+        raise OrchError(e.code, e.msg)
+
+
+def _github_tools(ctx, rid, r, tools, execs, author):
+    g = gh_node(ctx, r)
+    graph_like = {"nodos": {int(r["id"]): r}}
+    for spec in ghrepo.tool_specs(g["perm"], g["merge"]):
+        name = spec["name"]
+        def fn(i, _n=name):
+            try:
+                out = gh_call(ctx, graph_like, r["id"], _n, i, author)
+            except OrchError as e:
+                return e.msg, True
+            return (out if isinstance(out, str) else json.dumps(out, ensure_ascii=False)), False
+        tools.append({"name": f"{rid}_{name}", "description": spec["description"],
+                      "schema": spec["inputSchema"]})
+        execs[f"{rid}_{name}"] = fn
 
 
 def org_tools(ctx, graph, run, node):
@@ -1582,7 +1681,7 @@ def snapshot_resources(ctx, run, graph, node):
                     shutil.copyfile(src, os.path.join(d, f"{run['id']}-{node['id']}-{rpid}.json"))
             emit(run, "log", nodeId=node["id"], text=f"pre-turn snapshot of {ref['name']}")
         except Exception as e:
-            emit(run, "log", nodeId=node["id"], text=f"snapshot failed ({meta.get('name')}): {e}")
+            emit(run, "log", nodeId=node["id"], text=f"snapshot failed ({ref['name']}): {e}")
 
 
 # ===================== locks por recurso/agente (decisión E) =====================
@@ -1599,6 +1698,8 @@ def _lock_key(r):
     d = r.get("data") or {}
     if r.get("type") == "agFolder":
         return f"dir:{os.path.realpath(os.path.expanduser(d['path']))}"
+    if r.get("type") == "agGithub":
+        return f"gh:{r['id']}"                     # cada nodo tiene SU clon
     return f"res:{d['projectId']}"
 
 
@@ -2156,6 +2257,34 @@ def _cli_resource_notes(ctx, graph, node):
         rpid = ref["key"]
         perm = (r["data"] or {}).get("permiso") or "editar"
         lvl = PERM_LEVEL.get(perm, 1)
+        if ref["kind"] == "repo":
+            # el CLONE es una carpeta más; lo REMOTO va por el MCP `dmgh<id>`, que habla con
+            # /gh/call de este backend: el token del nodo no sale nunca del backend
+            err = gh_prepare(ctx, r)
+            if err:
+                notes.append(f"- «{ref['name']}» (GitHub repo {ref['repo']}): NOT available — {err}. "
+                             "Tell the human.")
+                continue
+            g = gh_node(ctx, r)
+            gname = f"dmgh{r['id']}"
+            mcp[gname] = {"kind": "gh", "nodeId": r["id"],
+                          "tools": ghrepo.allowed_tools(g["perm"], g["merge"])}
+            remote = (f"for git and GitHub (commit, push, branches, PRs, issues"
+                      f"{', MERGE' if g['merge'] else ''}) use the `mcp__{gname}__*` tools — a `git push` "
+                      "from your shell has NO credentials and will fail")
+            if confinado:
+                name = f"dmfs{r['id']}"
+                mcp[name] = {"projectId": rpid, "perm": lvl}
+                notes.append(f"- «{ref['name']}» (GitHub repo {ref['repo']}, permission {perm}): its files "
+                             f"ONLY through `mcp__{name}__*`; {remote}.")
+            elif lvl >= 1:
+                add_dirs.append(g["path"])
+                notes.append(f"- «{ref['name']}» (GitHub repo {ref['repo']}, permission {perm}): a local "
+                             f"clone at {g['path']} — work on its files DIRECTLY; {remote}.")
+            else:
+                notes.append(f"- «{ref['name']}» (GitHub repo {ref['repo']}, permission leer): the clone is "
+                             f"NOT mounted (native tools can't be read-only); {remote}.")
+            continue
         if _res_is_files(ref):
             target = editorfs.get_target(ctx["app_dir"], rpid)
             if not target:
@@ -2371,6 +2500,10 @@ def _cli_cmd(ctx, graph, node, frame, message, cli_bin, cli=None):
     d = node.get("data") or {}
     confinado = bool(d.get("confinado"))
     notes, add_dirs, mcp = _cli_resource_notes(ctx, graph, node)
+    if not cli.can_confine and any(i.get("kind") == "gh" for i in mcp.values()):
+        # agy no tiene --mcp-config: la nota del repo prometería tools que no le llegan
+        notes = [n.replace("use the `mcp__", "you do NOT have the tools (this CLI can't load them) — "
+                           "ask a Claude Code agent or the human; they would be `mcp__") for n in notes]
     system = _cli_system(ctx, graph, node, notes)
     ia = d.get("ia") or {}
     cwd = _cli_workspace(ctx, node["id"])
@@ -2392,6 +2525,7 @@ def _cli_cmd(ctx, graph, node, frame, message, cli_bin, cli=None):
         "mcp_env": {"url": ctx.get("local_url") or "http://127.0.0.1:8765",
                     "token": ctx.get("local_token") or ""},
         "session": frame.get("sessionId"),
+        "project_id": ctx["pid"],
     }
     cmd, cfg = cli.build(cli_bin, spec)
     return cmd, cwd, cfg
@@ -3165,9 +3299,18 @@ def inspect_node(ctx, node_id):
         notes, add_dirs, mcp = _cli_resource_notes(ctx, graph, node)
         cwd = _cli_workspace(ctx, node["id"])
         refs = []
+        for name, info in mcp.items():
+            if info.get("kind") == "gh":
+                refs.append({"origin": "mcp", "label": "GitHub via MCP", "prefix": name,
+                             "note": ("Every call goes to /gh/call of this backend, which checks the node's "
+                                      "permission again and adds the token: the agent never sees it."),
+                             "tools": [{"name": f"mcp__{name}__{t}", "schema": {}, "description": ""}
+                                       for t in info["tools"]]})
         if confinado:
             # el whitelist real: una entrada por editor cableado, según su permiso
             for name, info in mcp.items():
+                if info.get("kind") == "gh":
+                    continue
                 tools = list(MCP_FS_READ)
                 if info["perm"] >= 1:
                     tools += MCP_FS_WRITE

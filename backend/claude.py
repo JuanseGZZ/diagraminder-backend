@@ -18,12 +18,13 @@ MCP_FS_TOOLS = ["fs_tree", "fs_read", "fs_write", "fs_mkdir", "fs_rename",
                 "gh_push", "gh_pull", "gh_log"]
 
 
-def _self_cmd():
-    """Comando que re-ejecuta este backend (binario onefile o `python server.py`)."""
+def _self_cmd(flag="--mcp-fs"):
+    """Comando que re-ejecuta este backend (binario onefile o `python server.py`) en
+    uno de sus modos MCP stdio (`--mcp-fs`, `--mcp-gh`)."""
     if getattr(sys, "frozen", False):
-        return {"command": sys.executable, "args": ["--mcp-fs"]}
+        return {"command": sys.executable, "args": [flag]}
     server_py = os.path.join(os.path.dirname(os.path.abspath(__file__)), "server.py")
-    return {"command": sys.executable, "args": [server_py, "--mcp-fs"]}
+    return {"command": sys.executable, "args": [server_py, flag]}
 
 # Modos del chat (web) → permission-mode de Claude Code. «auto» sigue siendo
 # acceptEdits: lo que acceptEdits no cubre (comandos, MCP) lo aprueba el puente de

@@ -69,7 +69,7 @@ DEFAULT_PORT = 8765
 # del orquestador necesitan la URL propia para hablarle al MCP del editor.
 PORT = DEFAULT_PORT
 NAME = "DiagraMinder"
-VERSION = "0.38.0"   # el mock del modo Object (/mock/<projectId>/…)
+VERSION = "0.39.0"   # el nodo GitHub del orquestador (agGithub, /gh/*)
 
 # ===================== rutas / disco =====================
 
@@ -817,6 +817,25 @@ class Handler(BaseHTTPRequestHandler):
         except sourcever.SvError as e:
             self._json(e.code, {"error": e.msg})
 
+    def _ghnode(self, pid, node_id, fn):
+        """Una operación sobre el nodo GitHub `node_id` del orquestador `pid` (doc 28
+        §GitHub): resuelve ctx + grafo + nodo y traduce los errores."""
+        import ghrepo
+        ctx = orch_ctx(pid)
+        if not ctx:
+            self._json(409, {"error": "the orchestrator is not synced", "code": "not_synced"})
+            return
+        try:
+            graph = orchestrator.load_graph(ctx)
+            node = orchestrator.gh_find(ctx, graph, node_id)
+            self._json(200, fn(ctx, graph, node))
+        except orchestrator.OrchError as e:
+            self._json(e.code, {"error": e.msg})
+        except ghrepo.GhError as e:
+            self._json(e.code, {"error": e.msg})
+        except (TypeError, ValueError):
+            self._json(400, {"error": "invalid nodeId"})
+
     def _orch_stream(self, pid, since):
         """SSE de eventos del run del orquestador (para pintar el canvas en vivo)."""
         ctx = orch_ctx(pid)
@@ -1402,6 +1421,17 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/orch/rundetail":
             self._orch(q.get("projectId", [None])[0],
                        lambda ctx: orchestrator.run_detail(ctx, q.get("runId", [None])[0]))
+        elif path in ("/gh/tools", "/gh/status"):
+            import ghrepo
+            def _tools(ctx, graph, node):
+                g = orchestrator.gh_node(ctx, node)
+                return {"tools": ghrepo.tool_specs(g["perm"], g["merge"])}
+            def _status(ctx, graph, node):
+                g = orchestrator.gh_node(ctx, node)
+                return {"repo": g["repo"], "path": g["path"], "tokenSet": bool(g["token"]),
+                        "perm": g["perm"], "merge": g["merge"], **ghrepo.status(g["path"])}
+            self._ghnode(q.get("projectId", [""])[0], q.get("nodeId", [""])[0],
+                     _tools if path == "/gh/tools" else _status)
         elif path == "/mocks/log":
             # los pedidos recientes que recibió el mock de un proyecto (doc 23 §Mock)
             pid = q.get("projectId", [""])[0]
@@ -1495,6 +1525,34 @@ class Handler(BaseHTTPRequestHandler):
             self._cancel(parse_qs(urlparse(self.path).query).get("runId", [None])[0])
         elif path == "/fetch":
             self._proxy_fetch(self._read_json())
+        # --- el nodo GitHub del orquestador (doc 28 §GitHub) ---
+        elif path in ("/gh/call", "/gh/verify", "/gh/sync"):
+            import ghrepo
+            b = self._read_json()
+            def _call(ctx, graph, node):
+                return {"result": orchestrator.gh_call(ctx, graph, node["id"], b.get("tool") or "",
+                                                       b.get("args") or {}, b.get("author") or "IA")}
+            def _verify(ctx, graph, node):
+                g = orchestrator.gh_node(ctx, node)
+                repo = ghrepo.parse_repo(b.get("repo")) or g["repo"]
+                if not repo:
+                    raise ghrepo.GhError(400, "That doesn't look like a repository: use owner/name.")
+                return ghrepo.verify(repo, g["token"])
+            def _sync(ctx, graph, node):
+                # lo pide el HUMANO desde el panel: clona si falta y trae lo último (si
+                # el clon está limpio). No pasa por el permiso del nodo: es para los agentes.
+                g = orchestrator.gh_node(ctx, node)
+                with ghrepo.lock_for(g["path"]):
+                    err = orchestrator.gh_prepare(ctx, node)
+                    if err:
+                        raise ghrepo.GhError(400, err)
+                    try:
+                        pulled = ghrepo.pull(g["path"], g["repo"], g["token"])
+                    except ghrepo.GhError as e:
+                        pulled = {"ok": False, "error": e.msg}
+                    return {"pull": pulled, **ghrepo.status(g["path"])}
+            fn = {"/gh/call": _call, "/gh/verify": _verify, "/gh/sync": _sync}[path]
+            self._ghnode(b.get("projectId") or "", b.get("nodeId"), fn)
         # --- mock del modo Object (doc 23 §Mock): la web publica la tabla de rutas ---
         elif path == "/mocks/publish":
             import mocks
@@ -2390,6 +2448,11 @@ def main():
     if "--mcp-fs" in sys.argv:
         import editor_mcp
         editor_mcp.main()
+        return
+    # MCP de un nodo GitHub del orquestador (doc 28 §GitHub): lo lanza Claude Code.
+    if "--mcp-gh" in sys.argv:
+        import github_mcp
+        github_mcp.main()
         return
 
     # MCP de los DIAGRAMAS (doc 37 §F18): lo lanza Claude Code —o cualquier cliente
