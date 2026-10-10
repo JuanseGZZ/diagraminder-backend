@@ -69,7 +69,7 @@ DEFAULT_PORT = 8765
 # del orquestador necesitan la URL propia para hablarle al MCP del editor.
 PORT = DEFAULT_PORT
 NAME = "DiagraMinder"
-VERSION = "0.37.2"   # orquestador: sin confinar, shell siempre
+VERSION = "0.38.0"   # el mock del modo Object (/mock/<projectId>/…)
 
 # ===================== rutas / disco =====================
 
@@ -206,6 +206,22 @@ def oauth():
         import mcp_oauth
         _OAUTH = mcp_oauth.OAuth()
     return _OAUTH
+
+
+# Las rutas del mock del modo Object (doc 23 §Mock). Una instancia por proceso, que
+# carga `mocks.json` al primer uso: el mock sobrevive a un reinicio del backend.
+_MOCKS = None
+_MOCKS_LOCK = threading.Lock()
+
+
+def mock_store():
+    global _MOCKS
+    with _MOCKS_LOCK:
+        if _MOCKS is None:
+            import mocks
+            os.makedirs(app_dir(), exist_ok=True)
+            _MOCKS = mocks.MockStore(os.path.join(app_dir(), "mocks.json"))
+    return _MOCKS
 
 
 def mcp_config_json():
@@ -884,11 +900,99 @@ class Handler(BaseHTTPRequestHandler):
             return None
         return fn(pdir)
 
+    # --- mock del modo Object (doc 23 §Mock) -----------------------------
+    def _mock_local(self):
+        """¿El pedido viene de ESTA máquina? El server escucha solo en 127.0.0.1, así
+        que lo único que llega de afuera es el túnel del MCP — y detrás del túnel el
+        Host es el de la URL pública. El mock no se publica a internet por abrir el
+        túnel para otra cosa. (También corta un DNS rebinding: Host = otro dominio.)"""
+        host = (self.headers.get("Host") or "").strip().lower()
+        if host.startswith("["):
+            host = host.split("]", 1)[0] + "]"
+        else:
+            host = host.split(":", 1)[0]
+        return host in ("127.0.0.1", "localhost", "[::1]")
+
+    def _mock_send(self, status, headers, data, head=False):
+        self.send_response(status)
+        for k, v in headers.items():
+            self.send_header(k, v)
+        # CORS abierto: el que le pega es TU front, desde otro puerto. Lo que se sirve
+        # acá es data de prueba que vos pusiste en el diagrama, sin token.
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Expose-Headers", "*")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        if not head:
+            self.wfile.write(data)
+
+    def _mock_serve(self, method):
+        """`<método> /mock/<projectId>/<ruta>` — PÚBLICO (sin el token local): le
+        pegan programas que no lo tienen. Solo desde esta máquina (_mock_local)."""
+        import mocks
+        parsed = urlparse(self.path)
+        partes = parsed.path.split("/", 3)          # ["", "mock", pid, resto]
+        pid = partes[2] if len(partes) > 2 else ""
+        ruta = "/" + (partes[3] if len(partes) > 3 else "")
+        req_body = self._read_raw() if method not in ("GET", "HEAD") else b""
+        jsonh = {"Content-Type": "application/json; charset=utf-8"}
+        if not self._mock_local():
+            self._mock_send(403, jsonh, b'{"error": "the mock only answers requests from this machine"}')
+            return
+        store = mock_store()
+        entry = store.get(pid) if mocks.valid_pid(pid) else None
+        if not entry:
+            self._mock_send(404, jsonh, json.dumps({
+                "error": "no mock published for this project",
+                "hint": "open the Object project in DiagraMinder with the backend connected"}).encode())
+            return
+        route, params, allow = mocks.match(entry["routes"], method, ruta)
+        if not route:
+            if allow:
+                status, headers, data = 405, {**jsonh, "Allow": ", ".join(allow)}, json.dumps(
+                    {"error": f"{method} not allowed on {ruta}", "allow": allow}).encode()
+            else:
+                rutas = [f"{r['method']} {r['path']}" for r in entry["routes"]]
+                status, headers, data = 404, jsonh, json.dumps(
+                    {"error": f"no mock route for {method} {ruta}", "routes": rutas}).encode()
+        else:
+            if route.get("delayMs"):
+                time.sleep(route["delayMs"] / 1000)
+            status, headers, data = mocks.build_response(route, params)
+        store.record(pid, mocks.log_entry(method, ruta, parsed.query, status, route, req_body))
+        self._mock_send(status, headers, data, head=(method == "HEAD"))
+
     # --- verbos ----------------------------------------------------------
     def do_OPTIONS(self):
         self.send_response(204)
-        self._cors()
+        if urlparse(self.path).path.startswith("/mock/"):
+            # el preflight de TU front: cualquier método, y los headers que pida
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers",
+                             self.headers.get("Access-Control-Request-Headers") or "*")
+            self.send_header("Access-Control-Max-Age", "600")
+        else:
+            self._cors()
         self.end_headers()
+
+    def _solo_mock(self, method):
+        if urlparse(self.path).path.startswith("/mock/"):
+            self._mock_serve(method)
+        else:
+            self._json(405, {"error": "method not allowed"})
+
+    def do_PUT(self):
+        self._solo_mock("PUT")
+
+    def do_PATCH(self):
+        self._solo_mock("PATCH")
+
+    def do_DELETE(self):
+        self._solo_mock("DELETE")
+
+    def do_HEAD(self):
+        self._solo_mock("HEAD")
 
 
     def _static(self, full):
@@ -1092,6 +1196,9 @@ class Handler(BaseHTTPRequestHandler):
         path = parsed.path
         q = parse_qs(parsed.query)
 
+        if path.startswith("/mock/"):
+            self._mock_serve("GET")
+            return
         # Panel de control (doc 18 §Panel): la página se sirve SIN auth porque ES
         # la que trae el token adentro; queda protegida por el loopback + la falta
         # de CORS (ver _html). Todo lo que hace después va con token, como la web.
@@ -1295,6 +1402,13 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/orch/rundetail":
             self._orch(q.get("projectId", [None])[0],
                        lambda ctx: orchestrator.run_detail(ctx, q.get("runId", [None])[0]))
+        elif path == "/mocks/log":
+            # los pedidos recientes que recibió el mock de un proyecto (doc 23 §Mock)
+            pid = q.get("projectId", [""])[0]
+            entry = mock_store().get(pid)
+            self._json(200, {"log": mock_store().log(pid),
+                             "routes": len(entry["routes"]) if entry else 0,
+                             "published": entry["ts"] if entry else None})
         elif path == "/orch/inspect":
             # radiografía de un agente: el system y las tools EXACTOS que recibiría
             # si girara ahora + lo que se le mandó (botones Context / Tools)
@@ -1305,6 +1419,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
+        if path.startswith("/mock/"):
+            self._mock_serve("POST")
+            return
         if path.startswith("/orch/hook/"):
             # PÚBLICO (doc 28 decisión V): lo autentica el TOKEN PROPIO del hook
             # (se lo diste al sistema externo), no el token local de la web.
@@ -1378,6 +1495,18 @@ class Handler(BaseHTTPRequestHandler):
             self._cancel(parse_qs(urlparse(self.path).query).get("runId", [None])[0])
         elif path == "/fetch":
             self._proxy_fetch(self._read_json())
+        # --- mock del modo Object (doc 23 §Mock): la web publica la tabla de rutas ---
+        elif path == "/mocks/publish":
+            import mocks
+            b = self._read_json()
+            try:
+                self._json(200, mock_store().publish(b.get("projectId"), b.get("name"),
+                                                     b.get("routes") or []))
+            except mocks.MockError as e:
+                self._json(e.code, {"error": e.msg})
+        elif path == "/mocks/logclear":
+            mock_store().clear_log(self._read_json().get("projectId") or "")
+            self._json(200, {"ok": True})
         # --- modo editor (doc 27) ---
         elif path == "/editor/target":
             b = self._read_json()
