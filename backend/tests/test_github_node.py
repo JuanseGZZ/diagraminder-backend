@@ -319,6 +319,16 @@ try:
     sistema = j.get("system") or ""
     check("cabeza CLI: el clon montado y el MCP dmgh2 para lo remoto",
           clon in sistema and "mcp__dmgh2__" in sistema and "NO credentials" in sistema, sistema[-500:])
+    # Antigravity (agy ≥ 1.3) recibe el MCP por plugin: su nota nombra SU server y ya no le
+    # dice que lo remoto lo haga otro (2026-10-10). El Inspect muestra lo mismo que el turno.
+    grafo(ia={"kind": "cli", "provider": "local-antigravity"})
+    st, j = pedir(f"/orch/inspect?projectId={PID}&nodeId=1")
+    sis_agy = j.get("system") or ""
+    check("cabeza agy: el system le nombra el server dmgh2_dmgh2 para lo remoto",
+          "dmgh2_dmgh2" in sis_agy and "NOT available" not in sis_agy and "mcp__dmgh2__" not in sis_agy,
+          sis_agy[-500:])
+    check("…y el token tampoco aparece", TOKEN not in json.dumps(j))
+    grafo(ia={"kind": "cli", "provider": "local"})
     import orch_cli
     spec = {"node_id": 1, "msg": "hola", "system": "s", "model": None, "effort": None, "add_dirs": [clon],
             "confinado": False, "mcp": {"dmgh2": {"kind": "gh", "nodeId": 2, "tools": editar}},

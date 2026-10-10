@@ -21,7 +21,9 @@ No llama a ninguna API ni ejecuta ningún CLI: corre sin red.
 
     python3 backend/tests/test_orch_cli_provider.py
 """
+import json
 import os
+import shutil
 import sys
 import tempfile
 
@@ -166,7 +168,7 @@ check("retoma con --conversation (no --resume)",
 check("modo accept-edits + saltear permisos (headless no puede aprobar)",
       flag(cmd, "--mode") == "accept-edits" and "--dangerously-skip-permissions" in cmd)
 check("sin --sandbox: no confinado = terminal de verdad, como Claude Code", "--sandbox" not in cmd)
-check("no arma config MCP (no tiene)", cfg is None)
+check("no arma --mcp-config (no tiene: el MCP le llega por plugin, ver K)", cfg is None)
 for f in ("--append-system-prompt", "--allowedTools", "--disallowedTools", "--mcp-config",
           "--permission-mode", "--verbose"):
     check(f"NO le pasa «{f}» (su binario no lo tiene)", f not in cmd)
@@ -283,6 +285,52 @@ with tempfile.TemporaryDirectory() as tmp:
     graph["flechas"].append({"kind": "usa", "fromId": 6, "toId": 3})
     check("otro agente sobre la MISMA carpeta espera",
           orchestrator._try_locks(graph, run, {"id": "f2", "nodeId": 6}) is False)
+
+print("\n=== K. Antigravity recibe el MCP del nodo GitHub por PLUGIN (agy ≥ 1.3) ===")
+# agy no tiene --mcp-config, pero carga `<workspace>/.agents/plugins/<p>/mcp_config.json`
+# también en `-p` (verificado contra agy 1.3.3 el 2026-10-10: listó y llamó la tool del
+# plugin). Sin esto un agente agy con un repo cableado no podía ni commitear (2026-10-10).
+ws = tempfile.mkdtemp(prefix="dmagyws-")
+viejo = os.path.join(ws, ".agents", "plugins", "dmgh99")
+os.makedirs(viejo)                                   # un repo que ya NO está cableado
+ajeno = os.path.join(ws, ".agents", "plugins", "otro")
+os.makedirs(ajeno)                                   # algo que no es nuestro: no se toca
+gh = {"dmgh7": {"kind": "gh", "nodeId": 7, "tools": ["git_status", "git_push"]}}
+cmd, cfg = agy.build("/bin/agy", spec(mcp=gh, workspace=ws, project_id="orchP"))
+plug = os.path.join(ws, ".agents", "plugins", "dmgh7")
+check("escribe el plugin dmgh7 en el workspace del agente",
+      os.path.isfile(os.path.join(plug, "plugin.json")) and os.path.isfile(os.path.join(plug, "mcp_config.json")))
+mc = json.load(open(os.path.join(plug, "mcp_config.json")))
+srv = mc["mcpServers"]["dmgh7"]
+check("con el MCP --mcp-gh de este backend (el mismo que Claude Code)", "--mcp-gh" in srv["args"], str(srv))
+check("apuntando al nodo y al orquestador",
+      srv["env"]["DMGH_NODE"] == "7" and srv["env"]["DMGH_PROJECT"] == "orchP", str(srv["env"]))
+check("con el token LOCAL", srv["env"]["DMGH_TOKEN"] == "tok")
+if os.name != "nt":
+    check("el config va 0600 (tiene el token local)",
+          (os.stat(os.path.join(plug, "mcp_config.json")).st_mode & 0o777) == 0o600)
+check("borra el plugin de un repo que ya no está cableado", not os.path.exists(viejo))
+check("y no toca plugins que no son suyos", os.path.isdir(ajeno))
+check("sigue sin --mcp-config (su binario no lo tiene)", "--mcp-config" not in cmd and cfg is None)
+agy.build("/bin/agy", spec(mcp={}, workspace=ws))
+check("sin repos cableados, no queda ningún plugin dmgh",
+      not any(n.startswith("dmgh") for n in os.listdir(os.path.join(ws, ".agents", "plugins"))))
+agy.build("/bin/agy", spec(mcp=gh))                  # sin workspace (tests viejos): no explota
+check("sin workspace no escribe nada ni explota", True)
+shutil.rmtree(ws, ignore_errors=True)
+
+nota = ["- «app» (GitHub repo a/b, permission editar): a local clone at /x — work on its files "
+        "DIRECTLY; for git and GitHub use the `mcp__dmgh7__*` tools — a `git push` from your "
+        "shell has NO credentials and will fail."]
+n_agy = orchestrator._cli_gh_notes(agy, nota, gh)[0]
+check("la nota de agy nombra SU server (dmgh7_dmgh7) y cómo llamarlo",
+      "dmgh7_dmgh7" in n_agy and "call_mcp_tool" in n_agy and "mcp__" not in n_agy, n_agy)
+check("…y ya no le dice que no tiene las tools", "NOT available" not in n_agy, n_agy)
+n_cl = orchestrator._cli_gh_notes(claude, nota, gh)[0]
+check("la de Claude Code queda igual (mcp__dmgh7__*)", n_cl == nota[0], n_cl)
+class _SinMcp: pass
+n_no = orchestrator._cli_gh_notes(_SinMcp(), nota, gh)[0]
+check("un CLI que no sabe cargarlo no recibe la promesa", "NOT available" in n_no and "mcp__" not in n_no, n_no)
 
 print(f"\n{'✅' if fail == 0 else '❌'} {ok}/{ok + fail}")
 sys.exit(0 if fail == 0 else 1)

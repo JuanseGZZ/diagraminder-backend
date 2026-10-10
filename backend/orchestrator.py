@@ -2489,6 +2489,21 @@ def _rm(path):
             pass
 
 
+def _cli_gh_notes(cli, notes, mcp):
+    """Cada CLI nombra distinto las tools del MCP de un repo (Claude: `mcp__dmgh<id>__*`;
+    agy, que lo recibe por plugin: el server `dmgh<id>_dmgh<id>`). Un CLI que no sabe
+    cargarlo no puede recibir la promesa: la nota se lo dice. La usan el turno y el
+    Inspect, así lo que se inspecciona es lo que el agente lee (2026-10-10)."""
+    ref = getattr(cli, "gh_tools_ref", None)
+    for gname, info in mcp.items():
+        if info.get("kind") != "gh":
+            continue
+        new = ref(gname) if ref else ("NOT available to you (this CLI can't load them) — ask a "
+                                      "Claude Code agent or the human")
+        notes = [n.replace(f"the `mcp__{gname}__*` tools", new) for n in notes]
+    return notes
+
+
 def _cli_cmd(ctx, graph, node, frame, message, cli_bin, cli=None):
     """(cmd, cwd, mcp_cfg_path) del turno CLI. Acá vive la decisión X: qué alcanza a
     tocar el agente. El cwd ya NO es la carpeta del mirror (ver `_cli_workspace`).
@@ -2500,10 +2515,7 @@ def _cli_cmd(ctx, graph, node, frame, message, cli_bin, cli=None):
     d = node.get("data") or {}
     confinado = bool(d.get("confinado"))
     notes, add_dirs, mcp = _cli_resource_notes(ctx, graph, node)
-    if not cli.can_confine and any(i.get("kind") == "gh" for i in mcp.values()):
-        # agy no tiene --mcp-config: la nota del repo prometería tools que no le llegan
-        notes = [n.replace("use the `mcp__", "you do NOT have the tools (this CLI can't load them) — "
-                           "ask a Claude Code agent or the human; they would be `mcp__") for n in notes]
+    notes = _cli_gh_notes(cli, notes, mcp)
     system = _cli_system(ctx, graph, node, notes)
     ia = d.get("ia") or {}
     cwd = _cli_workspace(ctx, node["id"])
@@ -2526,6 +2538,7 @@ def _cli_cmd(ctx, graph, node, frame, message, cli_bin, cli=None):
                     "token": ctx.get("local_token") or ""},
         "session": frame.get("sessionId"),
         "project_id": ctx["pid"],
+        "workspace": cwd,
     }
     cmd, cfg = cli.build(cli_bin, spec)
     return cmd, cwd, cfg
@@ -3297,6 +3310,7 @@ def inspect_node(ctx, node_id):
         cli_prof = ORCH_CLIS.get(provider) or ORCH_CLIS["local"]
         confinado = bool(d.get("confinado"))
         notes, add_dirs, mcp = _cli_resource_notes(ctx, graph, node)
+        notes = _cli_gh_notes(cli_prof, notes, mcp)
         cwd = _cli_workspace(ctx, node["id"])
         refs = []
         for name, info in mcp.items():

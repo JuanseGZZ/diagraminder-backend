@@ -26,6 +26,7 @@ el chat sí andan, porque ahí el cwd ES la carpeta del proyecto.
 """
 import json
 import os
+import shutil
 import tempfile
 
 from agy_cli import AntigravityAdapter
@@ -112,6 +113,10 @@ class ClaudeOrch:
 
     def install(self, work_dir):
         install_skills(work_dir)          # <workspace>/.claude/skills/
+
+    def gh_tools_ref(self, name):
+        """Cómo se nombran, en la nota del system, las tools del MCP `dmgh<id>`."""
+        return f"the `mcp__{name}__*` tools"
 
     def build(self, b, s):
         """(cmd, mcp_cfg_path). `s` es el spec neutral que arma `_cli_cmd`."""
@@ -234,9 +239,12 @@ class AgyOrch:
     1. **No hay `--append-system-prompt`**: el rol del agente y las notas de sus recursos
        van como encabezado del propio prompt. El esquema de los diagramas viaja aparte, por
        `AGENTS.md`/`GEMINI.md` (`install_agents_md`), que agy sí lee.
-    2. **No hay `--allowedTools`/`--disallowedTools` ni MCP**: no se puede confinar ni
-       apagar tools sueltas. Por eso `can_confine = False` y el motor rechaza un nodo
-       confinado con agy — una guarda que no se puede cumplir no es una guarda.
+    2. **No hay `--allowedTools`/`--disallowedTools` ni `--mcp-config`**: no se puede
+       confinar ni apagar tools sueltas. Por eso `can_confine = False` y el motor rechaza un
+       nodo confinado con agy — una guarda que no se puede cumplir no es una guarda.
+       MCP sí tiene desde la 1.3 (verificado contra agy 1.3.3, 2026-10-10), pero no por
+       flag: lo lee de PLUGINS, y `<workspace>/.agents/plugins/<p>/mcp_config.json` se
+       carga también en `-p`. Así le llega el MCP del nodo GitHub (`_write_gh_plugins`).
     3. **El nivel de razonamiento va pegado al id del modelo** (`…-high/-medium/-low`), así
        que NO se le suma el keyword de esfuerzo que se le manda a Claude: sería pedirle dos
        cosas distintas a la vez.
@@ -259,6 +267,42 @@ class AgyOrch:
     def install(self, work_dir):
         AntigravityAdapter().install_instructions(work_dir)   # AGENTS.md + GEMINI.md
 
+    def gh_tools_ref(self, name):
+        # agy expone las tools de un MCP de plugin como `<plugin>_<server>` y se llaman
+        # con su tool `call_mcp_tool` (ServerName/ToolName), no como `mcp__x__y`.
+        return f"the tools of the MCP server `{name}_{name}` (via call_mcp_tool)"
+
+    def _write_gh_plugins(self, s):
+        """Un plugin por repo cableado en `<workspace>/.agents/plugins/dmgh<id>/`, con el
+        MCP `--mcp-gh` de este backend (el mismo que recibe Claude Code). Se reescriben en
+        CADA turno y se borran los que sobran: un repo desconectado del agente no puede
+        seguir dándole tools. El config lleva el token LOCAL (no el de GitHub, que no sale
+        del backend), así que va 0600 como el `--mcp-config` de Claude."""
+        ws = s.get("workspace")
+        if not ws:
+            return
+        root = os.path.join(ws, ".agents", "plugins")
+        if os.path.isdir(root):
+            for n in os.listdir(root):
+                if n.startswith("dmgh"):
+                    shutil.rmtree(os.path.join(root, n), ignore_errors=True)
+        for name, info in (s["mcp"] or {}).items():
+            if info.get("kind") != "gh":
+                continue
+            d = os.path.join(root, name)
+            os.makedirs(d, exist_ok=True)
+            with open(os.path.join(d, "plugin.json"), "w", encoding="utf-8") as f:
+                json.dump({"name": name}, f)
+            cfg = os.path.join(d, "mcp_config.json")
+            with open(cfg, "w", encoding="utf-8") as f:
+                json.dump({"mcpServers": {name: {
+                    **_self_cmd("--mcp-gh"),
+                    "env": {"DMGH_URL": s["mcp_env"]["url"], "DMGH_TOKEN": s["mcp_env"]["token"],
+                            "DMGH_PROJECT": s.get("project_id") or "",
+                            "DMGH_NODE": str(info["nodeId"])},
+                }}}, f)
+            os.chmod(cfg, 0o600)
+
     def build(self, b, s):
         # el system NO tiene flag propio: va arriba del mensaje, separado y rotulado para
         # que el modelo no lo confunda con la tarea
@@ -274,6 +318,9 @@ class AgyOrch:
         # confinado tiene shell — lo mismo que Claude Code (ver ClaudeOrch.build).
         if s.get("session"):
             cmd += [self.resume_flag, str(s["session"])]
+        # lo remoto del nodo GitHub: el MCP va por plugin (las tools se aprueban solas por
+        # el --dangerously-skip-permissions de arriba; sin eso, headless se auto-deniegan)
+        self._write_gh_plugins(s)
         return cmd, None
 
     def feed(self, obj, st, log):

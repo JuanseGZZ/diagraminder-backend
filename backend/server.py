@@ -69,7 +69,7 @@ DEFAULT_PORT = 8765
 # del orquestador necesitan la URL propia para hablarle al MCP del editor.
 PORT = DEFAULT_PORT
 NAME = "DiagraMinder"
-VERSION = "0.39.0"   # el nodo GitHub del orquestador (agGithub, /gh/*)
+VERSION = "0.39.1"   # agy recibe el MCP del nodo GitHub (plugin) + reveal de la carpeta de datos
 
 # ===================== rutas / disco =====================
 
@@ -1944,9 +1944,18 @@ class Handler(BaseHTTPRequestHandler):
 
     # --- carpetas (abrir en el explorador + selector + lectura) ---
     def _folders_reveal(self, body):
-        """Abre el explorador del SO en la carpeta (o en la raíz si no se da)."""
+        """Abre el explorador del SO en la carpeta (o en la raíz si no se da).
+
+        `app: true` abre la carpeta de DATOS entera (app_dir: `…/DiagraMind/`, con
+        projects/, orchestrator/ y la config). Es lo que espera el «Open root folder» de
+        la web: «la raíz de donde guarda todo DiagraMinder», no solo los proyectos. Va
+        pedido explícito y no cambiando el default porque el panel local muestra y abre
+        `projects_dir()` con este mismo endpoint (2026-10-10)."""
         folder = body.get("folder")
-        path = folder_dir(folder) if folder else projects_dir()
+        if body.get("app"):
+            path = app_dir()
+        else:
+            path = folder_dir(folder) if folder else projects_dir()
         ok = reveal_in_explorer(path)
         self._json(200, {"ok": ok, "path": path})
 
