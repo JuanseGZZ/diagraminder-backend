@@ -55,8 +55,8 @@ import tempfile
 import editorfs
 import ghrepo
 import sourcever
-from orch_cli import (CLI_DIAGRAM_TOOLS, CLI_DISALLOWED, CLI_SHELL_TOOLS, MCP_FS_EXEC,
-                      MCP_FS_READ, MCP_FS_WRITE, ORCH_CLIS, CliTurnError)
+from orch_cli import (CLI_DIAGRAM_TOOLS, CLI_DISALLOWED, CLI_SHELL_TOOLS, CODE_MAP_TOOLS,
+                      MCP_FS_EXEC, MCP_FS_READ, MCP_FS_WRITE, ORCH_CLIS, CliTurnError)
 from orch_cli import new_state as new_cli_state
 from orch_cli import result_of as cli_result
 from skills import SKILLS as TYPE_SKILLS
@@ -2323,6 +2323,48 @@ def _cli_resource_notes(ctx, graph, node):
     return notes, add_dirs, mcp
 
 
+def _cli_code_roots(ctx, graph, node):
+    """Las carpetas de CÓDIGO de un agente: sus carpetas (editores) y los clones de sus
+    repos, confinado o no. Es lo que el MCP del code map (`--mcp-code`) lo deja escanear
+    (doc 40 §Etapa 5): el mapa de SU código. Solo lo que ya existe en disco — esto no
+    clona nada (eso lo hace `gh_prepare`, en el turno)."""
+    roots = []
+    for r in resources_of(graph, node["id"]):
+        ref = _res_ref(ctx, r)
+        if not ref:
+            continue
+        path = None
+        if ref["kind"] == "repo":
+            try:
+                path = gh_node(ctx, r).get("path")
+            except Exception:
+                path = None
+        elif _res_is_files(ref):
+            path = editorfs.get_target(ctx["app_dir"], ref["key"])
+        if path and os.path.isdir(path) and path not in roots:
+            roots.append(path)
+    return roots
+
+
+CODE_MAP_NOTE = (
+    "CODE MAPS: the `mcp__dmcode__*` tools answer how code is wired without reading it — "
+    "code_map_overview (start here), code_find, code_who_calls, code_calls and, BEFORE you "
+    "change a function or a file, code_impact (who depends on it, which user actions reach "
+    "it). After editing code, call code_map_scan on that folder so the map stays true. "
+    "They are static analysis of JavaScript only: dynamic calls are not seen.")
+
+
+def _cli_code_notes(ctx, graph, node, cli, notes):
+    """(notas, carpetas de código) — o (notas, None) si el CLI no carga el MCP del code
+    map. La usan el turno y el Inspect: lo que se inspecciona es lo que el agente lee."""
+    if not getattr(cli, "code_map", False):
+        return notes, None
+    roots = _cli_code_roots(ctx, graph, node)
+    extra = (" Your code folders: " + ", ".join(roots) + "." if roots else
+             " You have no code folder wired: you can query the user's existing code maps only.")
+    return notes + ["- " + CODE_MAP_NOTE + extra], roots
+
+
 def _has_editor(ctx, graph, node_id):
     """¿tiene alguna CARPETA cableada? Es el único lugar donde un agente puede
     escribir archivos de código, así que sin una hay que mandarlo a preguntar."""
@@ -2516,6 +2558,8 @@ def _cli_cmd(ctx, graph, node, frame, message, cli_bin, cli=None):
     confinado = bool(d.get("confinado"))
     notes, add_dirs, mcp = _cli_resource_notes(ctx, graph, node)
     notes = _cli_gh_notes(cli, notes, mcp)
+    # el code map (doc 40 §Etapa 5): solo para los CLIs que saben cargarlo
+    notes, code_roots = _cli_code_notes(ctx, graph, node, cli, notes)
     system = _cli_system(ctx, graph, node, notes)
     ia = d.get("ia") or {}
     cwd = _cli_workspace(ctx, node["id"])
@@ -2534,6 +2578,7 @@ def _cli_cmd(ctx, graph, node, frame, message, cli_bin, cli=None):
         "add_dirs": add_dirs,
         "confinado": confinado,
         "mcp": mcp,
+        "code_roots": code_roots,
         "mcp_env": {"url": ctx.get("local_url") or "http://127.0.0.1:8765",
                     "token": ctx.get("local_token") or ""},
         "session": frame.get("sessionId"),
@@ -3313,6 +3358,14 @@ def inspect_node(ctx, node_id):
         notes = _cli_gh_notes(cli_prof, notes, mcp)
         cwd = _cli_workspace(ctx, node["id"])
         refs = []
+        notes, roots = _cli_code_notes(ctx, graph, node, cli_prof, notes)
+        if roots is not None:
+            refs.append({"origin": "mcp", "label": "Code map via MCP", "prefix": "dmcode",
+                         "note": ("Queries the user's code maps; code_map_scan reaches only these "
+                                  "folders (checked again by /codemap/scan): " +
+                                  (", ".join(roots) or "none — it can only refresh existing maps")),
+                         "tools": [{"name": f"mcp__dmcode__{t}", "schema": {}, "description": ""}
+                                   for t in CODE_MAP_TOOLS]})
         for name, info in mcp.items():
             if info.get("kind") == "gh":
                 refs.append({"origin": "mcp", "label": "GitHub via MCP", "prefix": name,

@@ -31,6 +31,7 @@ import tempfile
 
 from agy_cli import AntigravityAdapter
 from agy_cli import map_model as agy_map_model
+from claude import CODE_MAP_TOOLS as _CODE_MAP_TOOLS
 from claude import EFFORT_THINK, _self_cmd, find_claude
 from claude import map_model as claude_map_model
 from cli_base import _find_bin
@@ -48,6 +49,10 @@ CLI_DIAGRAM_TOOLS = ["Read", "Write", "Edit", "Glob", "Grep"]
 # (Windows). Nombrar solo Bash dejaba el shell abierto en Windows — y al revés, la
 # pre-aprobación del agente no confinado tiene que cubrir las dos.
 CLI_SHELL_TOOLS = ["Bash", "PowerShell"]
+# El MCP del code map (`--mcp-code`, doc 40 §Etapa 5): consultar los mapas y escanear SUS
+# carpetas. Solo lectura de código (no lo modifica), así que va pre-aprobado. La lista es
+# la del chat (claude.py): una sola, para que los dos no se separen.
+CODE_MAP_TOOLS = _CODE_MAP_TOOLS
 CLI_DISALLOWED = ["WebFetch", "WebSearch"]
 
 # frases con las que Claude Code contesta un tool_use rechazado por permisos (headless:
@@ -100,6 +105,7 @@ class ClaudeOrch:
     editor) y `--allowedTools` (la whitelist), y es el único que los tiene."""
 
     key = "local"
+    code_map = True           # carga el MCP del code map (`--mcp-code`)
     label = "Claude Code"
     bin_names = ["claude"]
     can_confine = True
@@ -142,6 +148,17 @@ class ClaudeOrch:
             }
             gh_allowed += [f"mcp__{name}__{t}" for t in info["tools"]]
 
+        # el code map (doc 40 §Etapa 5): un server `dmcode` contra este backend, confinado
+        # a las carpetas de código del agente (las fija el backend, no el modelo)
+        code_servers, code_allowed = {}, []
+        if s.get("code_roots") is not None:
+            code_servers["dmcode"] = {
+                **_self_cmd("--mcp-code"),
+                "env": {"DMD_URL": s["mcp_env"]["url"], "DMD_TOKEN": s["mcp_env"]["token"],
+                        "DMD_SCAN_ROOTS": os.pathsep.join(s["code_roots"])},
+            }
+            code_allowed = [f"mcp__dmcode__{t}" for t in CODE_MAP_TOOLS]
+
         def _write_cfg(servers):
             fd, path = tempfile.mkstemp(prefix=f"dmorch-mcp-{s['node_id']}-", suffix=".json")
             with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -153,7 +170,7 @@ class ClaudeOrch:
             # whitelist: SOLO las tools del MCP (una por editor, según permiso) y, si tiene
             # diagramas cableados —o es un director, que alcanza su organigrama—, las nativas
             # de archivo, que solo llegan a sus add_dirs.
-            servers, allowed = dict(gh_servers), list(gh_allowed)
+            servers, allowed = {**gh_servers, **code_servers}, gh_allowed + code_allowed
             for name, info in (s["mcp"] or {}).items():
                 if info.get("kind") == "gh":
                     continue
@@ -190,9 +207,9 @@ class ClaudeOrch:
             # PRE-APROBARLAS: `acceptEdits` auto-aprueba las ediciones, no los comandos, así
             # que headless cada comando se auto-denegaría.
             cmd += ["--disallowedTools"] + list(CLI_DISALLOWED)
-            cmd += ["--allowedTools", ",".join(CLI_SHELL_TOOLS + gh_allowed)]
-            if gh_servers:
-                cfg = _write_cfg(gh_servers)
+            cmd += ["--allowedTools", ",".join(CLI_SHELL_TOOLS + gh_allowed + code_allowed)]
+            if gh_servers or code_servers:
+                cfg = _write_cfg({**gh_servers, **code_servers})
                 cmd += ["--mcp-config", cfg]
         if s.get("session"):
             cmd += [self.resume_flag, str(s["session"])]

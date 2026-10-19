@@ -33,6 +33,12 @@ import mcp_policy as _mp
 
 BASE = ""
 TOKEN = ""
+# «full» = el MCP del usuario (`--mcp-diagrams`: lo pega en su cliente, lo gobierna la
+# política de Ajustes). «code» = el de los agentes de la PROPIA app (`--mcp-code`: el
+# chat y el orquestador): solo las code_*, y escanear solo dentro de SCAN_ROOTS (las
+# carpetas que ese agente ya tiene) o refrescar un mapa que el usuario ya tiene.
+PROFILE = "full"
+SCAN_ROOTS = ()
 
 _STR = {"type": "string"}
 
@@ -51,7 +57,9 @@ TOOLS = [
             "need is the one here. `type` tells you what the diagram is for: cart (an org "
             "chart: the project's documentation), freestyle (a free canvas: associative "
             "memory), activities (an ordered to-do), object (data model / UML), "
-            "orchestrator (a team of AI agents), treeQuestionary, documents."
+            "orchestrator (a team of AI agents), treeQuestionary, documents, codemap (a "
+            "scanned map of a JavaScript code base — query it with the code_* tools, never "
+            "read it whole)."
         ),
         "inputSchema": _schema({}, []),
     },
@@ -217,6 +225,87 @@ MEMORY_TOOLS = [
 TOOLS = TOOLS + MEMORY_TOOLS
 _NOMBRES_MEMORIA = {t["name"] for t in MEMORY_TOOLS}
 
+# ---------------------------------------------------------------------------------
+# El CODE MAP como memoria del código (doc 40 §Etapa 5, codemap.py): en vez de leer el
+# repo entero para saber qué rompe un cambio, el agente le pregunta al mapa. Las de
+# consulta leen un diagrama (nivel «diagrams»); escanear lee CÓDIGO del disco, así que
+# es del nivel «files» y queda confinado a la carpeta del MCP (lo chequea el servidor).
+_MAPA = {"map": {"type": "string", "description": "the code map's name (list_diagrams, type codemap); optional when there is only one, or when `path` says which folder"},
+         "map_folder": {"type": "string", "description": "the app folder the map lives in (optional if its name is unique)"}}
+_SYMBOL = {"type": "string", "description": "a function: name, Class.method, path:name or path:line (path:line is never ambiguous)"}
+_DEPTH = {"type": "integer", "description": "levels to follow, 1-6 (default 2)"}
+
+_COMO_CODIGO = (
+    " The code map is a MEMORY of how the code is wired: ask it instead of reading whole "
+    "files. It is static analysis: it can't see dynamic calls (obj[k]()), callbacks passed "
+    "to libraries or calls from HTML, and edges marked BY NAME are less certain.")
+
+CODE_TOOLS = [
+    {
+        "name": "code_map_scan",
+        "description": (
+            "Scans a JavaScript project folder and saves its code map (files, imports, "
+            "functions, who calls whom, event listeners), which also shows up in the user's "
+            "app. Rescanning the same folder UPDATES its map: call it again after you edit "
+            "code, so the map doesn't lie to you or to the next agent. `path` is relative to "
+            "the folder the user gave DiagraMinder's MCP (default: that folder) and must be "
+            "inside it. node_modules, dist, vendor, build and minified files are skipped."),
+        "inputSchema": _schema({"path": {"type": "string", "description": "the project folder (default: the MCP folder)"},
+                                "name": {"type": "string", "description": "name for a NEW map (default 'Code map: <folder>')"},
+                                "map_folder": {"type": "string", "description": "app folder for a new map (optional)"}}, []),
+    },
+    {
+        "name": "code_map_overview",
+        "description": (
+            "The shape of a code base in a few lines: folders, the most called functions, the "
+            "most imported files, import cycles, files that did not parse — and whether the "
+            "map is still FRESH (it tells you if code changed since the scan). Start here." + _COMO_CODIGO),
+        "inputSchema": _schema(dict(_MAPA), []),
+    },
+    {
+        "name": "code_find",
+        "description": (
+            "Finds functions, methods, classes, event listeners or files by name (substring, "
+            "case-insensitive), each as path:line with its number of callers and calls. "
+            "Filter with `kind` (function, method, event, class, module, file) and `file`. "
+            "Use it to get the exact symbol to pass to the other code_* tools."),
+        "inputSchema": _schema({**_MAPA, "query": _STR,
+                                "kind": {"type": "string", "enum": ["function", "method", "event", "class", "module", "file"]},
+                                "file": {"type": "string", "description": "only inside this file (path or its end)"},
+                                "limit": {"type": "integer", "description": "default 40"}}, []),
+    },
+    {
+        "name": "code_who_calls",
+        "description": (
+            "Who calls a function, and who calls those, up to `depth` levels — each with "
+            "path:line, the line of the call and how it was resolved. An event listener has "
+            "no callers (the browser fires it): it tells you where it is registered."),
+        "inputSchema": _schema({**_MAPA, "symbol": _SYMBOL, "depth": _DEPTH}, ["symbol"]),
+    },
+    {
+        "name": "code_calls",
+        "description": (
+            "What a function (or an event listener) calls, and what those call, up to "
+            "`depth` levels — the chain of activation, with path:line. Also lists the event "
+            "listeners it registers and what it uses from outside the project."),
+        "inputSchema": _schema({**_MAPA, "symbol": _SYMBOL, "depth": _DEPTH}, ["symbol"]),
+    },
+    {
+        "name": "code_impact",
+        "description": (
+            "Call it BEFORE you change a function or a file: what depends on it. For a "
+            "function: its direct callers (with the call lines), how many indirect ones, the "
+            "event listeners — user actions — that end up running it, whether it is exported. "
+            "For a file: who imports it, which of its functions are used from other files, "
+            "the events elsewhere that reach it, and whether it is in an import cycle. This is "
+            "the list of places to check after your edit, without reading the whole repo." + _COMO_CODIGO),
+        "inputSchema": _schema({**_MAPA, "target": {"type": "string", "description": "a file path, or a symbol (name, Class.method, path:name, path:line)"}},
+                               ["target"]),
+    },
+]
+TOOLS = TOOLS + CODE_TOOLS
+_NOMBRES_CODIGO = {t["name"] for t in CODE_TOOLS}
+
 
 def _api(path, body=None):
     """GET o POST contra el backend local. Devuelve (json, error_str)."""
@@ -294,6 +383,10 @@ def call_tool(name, args):
             import skills
         except Exception as e:
             return f"could not load the schemas: {e}", True
+        if tipo.lower() == "codemap":
+            return ("A codemap is not written by hand: it is the output of code_map_scan (the "
+                    "analyzer's graph). Create or refresh one with code_map_scan and query it "
+                    "with code_map_overview / code_find / code_impact / code_who_calls / code_calls."), False
         clave = f"diagramind-{tipo.lower()}"
         cuerpo = skills.SKILLS.get(clave)
         if not cuerpo:
@@ -311,6 +404,13 @@ def call_tool(name, args):
         if err:
             return err, True
         folder, nombre_real, tj = hit
+        if _es_codemap(tj):
+            # 400 KB de arrays compactos no le sirven a nadie en el contexto, y escribirlo
+            # a mano rompería el grafo: el mapa se consulta y se regenera, no se edita.
+            if name == "write_diagram":
+                return ("'" + nombre_real + "' is a code map: it is generated, not written. "
+                        "Refresh it with code_map_scan."), True
+            return _codigo("code_map_overview", {"map": nombre_real, "map_folder": folder})
         if name == "read_diagram":
             return tj or "{}", False
 
@@ -339,7 +439,173 @@ def call_tool(name, args):
     if name in _NOMBRES_MEMORIA:
         return _memoria(name, args)
 
+    if name in _NOMBRES_CODIGO:
+        return _codigo(name, args)
+
     return f"unknown tool: {name}", True
+
+
+def _safe_name(nombre):
+    from util import safe_name
+    return safe_name(nombre)
+
+
+def _es_codemap(tj):
+    try:
+        return '"codemap"' in (tj or "")[:200] and json.loads(tj).get("type") == "codemap"
+    except Exception:
+        return False
+
+
+def _mapas():
+    """[(carpeta, nombre, obj)] de los codemaps que hay."""
+    todos, err = _proyectos()
+    if err:
+        return None, err
+    out = []
+    for f, n, tj in todos:
+        if _es_codemap(tj):
+            try:
+                out.append((f, n, json.loads(tj)))
+            except Exception:
+                pass
+    return out, None
+
+
+def _elegir_mapa(args):
+    """El mapa al que se refiere la llamada: por nombre, o el único que hay. Ambiguo →
+    error con la lista (elegir a dedo responde sobre el código equivocado)."""
+    mapas, err = _mapas()
+    if err:
+        return None, err
+    if not mapas:
+        return None, ("the user has no code map yet. Create one with code_map_scan (needs the "
+                      "MCP at level 'files'), or ask the user to scan the project in the app's "
+                      "Code map mode.")
+    nombre = (args.get("map") or "").strip()
+    carpeta = (args.get("map_folder") or "").strip()
+    cand = [m for m in mapas if (not nombre or m[1] == nombre) and (not carpeta or m[0] == carpeta)]
+    if not cand:
+        return None, (f"no code map named '{nombre}'. Code maps: " +
+                      ", ".join(f"{f}/{n}" for f, n, _ in mapas))
+    if len(cand) > 1:
+        return None, ("there are several code maps; pass `map` (and `map_folder` if needed): " +
+                      "; ".join(f"{n} (folder {f}, code at {(o.get('scan') or {}).get('path') or (o.get('scan') or {}).get('root') or '?'})"
+                                for f, n, o in cand))
+    return cand[0], None
+
+
+def _origen(mapas=()):
+    """Cómo se presenta este MCP ante /codemap/*: el del usuario como «mcp» (lo
+    gobierna la política), el de la app como «agent» con sus carpetas (`roots`, con
+    todo lo de adentro) y las de los mapas que ya existen (`maps`, SOLO esa ruta: se
+    refrescan, no abren sus subcarpetas)."""
+    if PROFILE == "code":
+        return {"origin": "agent", "roots": list(SCAN_ROOTS), "maps": [m for m in mapas if m]}
+    return {"origin": "mcp"}
+
+
+def _frescura(obj):
+    """El texto de frescura del mapa: lo pregunta al SERVIDOR (que aplica la política);
+    si no deja mirar la carpeta, «desconocida» — nunca «fresco» sin haberlo visto."""
+    import codemap as _cm
+    sc = obj.get("scan") or {}
+    actual = None
+    if isinstance(sc.get("stamp"), dict) and sc.get("path"):
+        res, err = _api("/codemap/stamp", {"path": sc["path"], **_origen([sc["path"]])})
+        if not err and isinstance(res, dict):
+            actual = res.get("stamp")
+    return _cm.freshness(obj, actual)[1]
+
+
+def _codigo(name, args):
+    import codemap as _cm
+    if name == "code_map_scan":
+        return _escanear(args)
+    hit, err = _elegir_mapa(args)
+    if err:
+        return err, True
+    _, _, obj = hit
+    try:
+        g = _cm.Graph(obj)
+        fresco = _frescura(obj)
+        if name == "code_map_overview":
+            return _cm.overview(g, fresco), False
+        if name == "code_find":
+            return _cm.find(g, fresco, args.get("query") or "", args.get("kind") or "",
+                            args.get("file") or "", int(args.get("limit") or 40)), False
+        if name == "code_who_calls":
+            return _cm.who_calls(g, fresco, args.get("symbol"), args.get("depth") or 2), False
+        if name == "code_calls":
+            return _cm.calls(g, fresco, args.get("symbol"), args.get("depth") or 2), False
+        if name == "code_impact":
+            return _cm.impact(g, fresco, args.get("target") or args.get("symbol")), False
+    except _cm.CodeMapError as e:
+        return str(e), True
+    return f"unknown tool: {name}", True
+
+
+def _escanear(args):
+    """code_map_scan: el SERVIDOR lee y analiza (y decide si se puede); acá se guarda
+    el resultado como un diagrama codemap — el mismo de esa carpeta si ya existe, así
+    re-escanear es «recargar» y no un mapa nuevo cada vez."""
+    mapas, err = _mapas()
+    if err:
+        return err, True
+    pedido = (args.get("path") or "").strip()
+    if PROFILE == "code":
+        # Un agente de la app escanea lo SUYO (SCAN_ROOTS) o refresca un mapa que el
+        # usuario ya tiene: refrescar no le abre nada nuevo, crear uno de cualquier
+        # carpeta sí. Una ruta relativa cuelga de su primera carpeta.
+        conocidas = [(m[2].get("scan") or {}).get("path") for m in mapas]
+        if not pedido and args.get("map"):
+            pedido = next(((m[2].get("scan") or {}).get("path") or "" for m in mapas if m[1] == args["map"]), "")
+        if not pedido:
+            if len(SCAN_ROOTS) != 1:
+                return ("pass `path`: the project folder to scan (absolute), or `map` to refresh an "
+                        "existing code map. Code maps: " + (", ".join(f"{n} ({p})" for (_, n, _), p in zip(mapas, conocidas) if p) or "none")), True
+            pedido = SCAN_ROOTS[0]
+        elif not os.path.isabs(pedido) and SCAN_ROOTS:
+            pedido = os.path.join(SCAN_ROOTS[0], pedido)
+        res, err = _api("/codemap/scan", {"path": pedido, **_origen([p for p in conocidas if p])})
+    else:
+        res, err = _api("/codemap/scan", {"path": pedido, "origin": "mcp"})
+    if err:
+        return err, True
+    texto, ruta = res.get("tree"), res.get("path")
+    nombre = (args.get("name") or "").strip()
+    previo = [m for m in mapas if (m[2].get("scan") or {}).get("path") == ruta]
+    if nombre:
+        previo = [m for m in mapas if m[1] == nombre] or []
+    obj = json.loads(texto)
+    resumen = (f"{(obj.get('scan') or {}).get('files')} files, {len(obj['graph']['fns'])} functions/events, "
+               f"{len(obj['graph']['calls'])} call edges")
+    if previo:
+        carpeta, nombre_real, _ = previo[0]
+        res2, err = _api("/state/write", {"folder": carpeta, "name": nombre_real, "treeJson": texto, "origin": "mcp"})
+        if err:
+            return err, True
+        aviso = "" if (isinstance(res2, dict) and res2.get("emitted")) else " (the app was not notified; it shows the new map when reopened)"
+        return (f"OK: code map '{nombre_real}' refreshed from {ruta} — {resumen}{aviso}. "
+                "Query it with code_map_overview / code_find / code_impact."), False
+    carpeta = (args.get("map_folder") or "").strip()
+    if not carpeta:
+        todos, err = _proyectos()
+        if err:
+            return err, True
+        hay = {f for f, _, _ in todos}
+        carpeta = hay.pop() if len(hay) == 1 else "Local"
+    # El nombre que queda es el de la CARPETA en disco (safe_name: sin «:» ni «/»).
+    # Contestar con otro haría que el agente busque un mapa que no existe.
+    nombre = _safe_name(nombre or f"Code map {os.path.basename(ruta) or 'project'}")
+    res2, err = _api("/state/write", {"folder": carpeta, "name": nombre, "treeJson": texto,
+                                      "origin": "mcp", "create": True})
+    if err:
+        return err, True
+    aviso = "" if (isinstance(res2, dict) and res2.get("emitted")) else " (the app was not notified; it shows up when the user reconnects)"
+    return (f"OK: code map '{nombre}' created in folder '{carpeta}' from {ruta} — {resumen}{aviso}. "
+            "Query it with code_map_overview / code_find / code_impact; after you edit code, "
+            "call code_map_scan again to refresh it."), False
 
 
 def _tipos_con_esquema():
@@ -355,7 +621,9 @@ def _crear(args):
     """create_diagram: lo nuevo va por el MISMO /state/write, con `create`. El backend
     es el que se niega a pisar uno existente y el que lo registra para que la web lo
     adopte: acá solo se valida lo que el modelo puede corregir solo."""
-    nombre = (args.get("name") or "").strip()
+    # El disco guarda el nombre saneado (safe_name: «Flow: x» queda «Flow x») y es ese
+    # el que después devuelve list_diagrams: se contesta con ESE, no con el pedido.
+    nombre = _safe_name((args.get("name") or "").strip()) if (args.get("name") or "").strip() else ""
     if not nombre:
         return "`name` is required: the new diagram's name.", True
     crudo = args.get("json")
@@ -499,6 +767,8 @@ def _policy():
 
 
 def _tools_visibles():
+    if PROFILE == "code":
+        return list(CODE_TOOLS)
     permitidas = set(_mp.herramientas(_policy()))
     return [t for t in TOOLS if t["name"] in permitidas]
 
@@ -513,12 +783,15 @@ def _reply(mid, result=None, error=None):
     sys.stdout.flush()
 
 
-def configurar(base, token):
+def configurar(base, token, profile="full", scan_roots=()):
     """Apunta este módulo (y el de archivos) a un backend. Lo llaman los DOS
-    transportes: el stdio de `--mcp-diagrams` y el HTTP de `POST /mcp`."""
-    global BASE, TOKEN
+    transportes: el stdio de `--mcp-diagrams` y el HTTP de `POST /mcp` — y, con
+    profile «code», el `--mcp-code` de los agentes de la app."""
+    global BASE, TOKEN, PROFILE, SCAN_ROOTS
     BASE = (base or "http://127.0.0.1:8765").rstrip("/")
     TOKEN = token or ""
+    PROFILE = profile if profile in ("full", "code") else "full"
+    SCAN_ROOTS = tuple(os.path.realpath(r) for r in scan_roots if r)
     # Las tools de archivos van por editor_mcp contra ESE backend: AUTH="local" es
     # el header X-DiagraMind-Token, y el projectId reservado es el que tiene como
     # target la carpeta que el usuario eligió (server.py → MCP_PID).
@@ -557,6 +830,14 @@ def handle(msg):
         # entera por una tool que falló. Se devuelve como error de la tool y sigue.
         nombre = params.get("name") or ""
         try:
+            if PROFILE == "code":
+                # el agente de la app: solo las code_*, sin la política del MCP del
+                # usuario (lo que puede leer lo deciden sus carpetas, en el servidor)
+                if nombre not in _NOMBRES_CODIGO:
+                    text, is_err = f"unknown tool: {nombre}", True
+                else:
+                    text, is_err = call_tool(nombre, params.get("arguments") or {})
+                return _ok(mid, {"content": [{"type": "text", "text": text}], "isError": is_err})
             pol = _policy()
             if not _mp.permite(pol, nombre):
                 text, is_err = _mp.motivo(pol, nombre), True
@@ -577,12 +858,13 @@ def _ok(mid, result):
     return {"jsonrpc": "2.0", "id": mid, "result": result}
 
 
-def main():
+def main(profile="full"):
     token = os.environ.get("DMD_TOKEN") or ""
     if not token:
         print("falta DMD_TOKEN (el token del backend; lo imprime `--mcp-config`)", file=sys.stderr)
         sys.exit(2)
-    configurar(os.environ.get("DMD_URL"), token)
+    roots = [r for r in (os.environ.get("DMD_SCAN_ROOTS") or "").split(os.pathsep) if r]
+    configurar(os.environ.get("DMD_URL"), token, profile, roots)
 
     for line in sys.stdin:
         line = line.strip()

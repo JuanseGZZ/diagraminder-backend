@@ -12,6 +12,9 @@ from skills import install_skills, SYSTEM_PREAMBLE
 from cli_base import _focus_note, _editor_note, _editor_relay_note, _find_bin
 
 # tools del MCP fs de editores externos (editor_mcp.py) — para --allowedTools
+# las del MCP del code map (`--mcp-code`): las mismas que recibe un agente del orquestador
+CODE_MAP_TOOLS = ["code_map_scan", "code_map_overview", "code_find", "code_who_calls",
+                  "code_calls", "code_impact"]
 MCP_FS_TOOLS = ["fs_tree", "fs_read", "fs_write", "fs_mkdir", "fs_rename",
                 "fs_delete", "fs_grep", "fs_exec",
                 "sv_save", "sv_list", "sv_restore",
@@ -212,6 +215,17 @@ class ClaudeAdapter:
                     "DMPERM_RUN": run["id"],
                 },
             }
+        # el CODE MAP (doc 40 §Etapa 5): consultar los mapas del usuario y refrescarlos.
+        # Escanear una carpeta NUEVA solo dentro del target del editor en foco: el chat
+        # trabaja sobre diagramas, no tiene una carpeta de código propia.
+        code = bool(run.get("local_url") and run.get("local_token"))
+        if code:
+            servers["dmcode"] = {
+                "command": _self_cmd()["command"],
+                "args": [a if a != "--mcp-fs" else "--mcp-code" for a in _self_cmd()["args"]],
+                "env": {"DMD_URL": run["local_url"], "DMD_TOKEN": run["local_token"],
+                        "DMD_SCAN_ROOTS": editor_target or ""},
+            }
         if servers:
             # el config va a un temp file 0600 (tiene tokens) que se borra en finalize()
             fd, cfg = tempfile.mkstemp(prefix=f"dm-mcp-{run['id']}-", suffix=".json")
@@ -220,9 +234,15 @@ class ClaudeAdapter:
             os.chmod(cfg, 0o600)
             run["_mcp_cfg"] = cfg
             cmd += ["--mcp-config", cfg]
+            # UN solo --allowedTools: leen código pero no lo cambian, así que el code map
+            # va pre-aprobado (si no, cada consulta sería una tarjeta de permiso)
+            allowed = []
             if editor_relay:
-                allowed = ",".join(f"mcp__dmfs__{t}" for t in MCP_FS_TOOLS)
-                cmd += ["--allowedTools", allowed]
+                allowed += [f"mcp__dmfs__{t}" for t in MCP_FS_TOOLS]
+            if code:
+                allowed += [f"mcp__dmcode__{t}" for t in CODE_MAP_TOOLS]
+            if allowed:
+                cmd += ["--allowedTools", ",".join(allowed)]
             if perm:
                 cmd += ["--permission-prompt-tool", "mcp__dmperm__approve"]
         if resume:

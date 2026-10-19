@@ -12,8 +12,10 @@ en cada `tools/call`, y el backend vuelve a chequear en `/fs` antes de tocar un 
 
 Los tres niveles son acumulativos:
 
-    diagrams  los 5 tools de diagramas y las 8 de memoria (memory_*). Es el default.
-    files     + leer/escribir/editar/grep/git, CONFINADO a `root`.
+    diagrams  los 5 tools de diagramas, las 8 de memoria (memory_*) y las 5 que CONSULTAN
+              un code map ya escaneado (code_*). Es el default.
+    files     + leer/escribir/editar/grep/git y escanear código (code_map_scan),
+              CONFINADO a `root`.
     shell     + ejecutar comandos. El confinamiento por carpeta NO alcanza contra un
               comando arbitrario, así que este nivel se elige a mano y se avisa.
 
@@ -32,8 +34,12 @@ TOOLS_POR_NIVEL = {
                  "create_diagram",
                  # la memoria: los mismos diagramas, de a un nodo (diagram_memory.py)
                  "memory_overview", "memory_search", "memory_read", "memory_add",
-                 "memory_update", "memory_link", "memory_unlink", "memory_delete"),
-    "files": ("fs_tree", "fs_read", "fs_write", "fs_edit", "fs_mkdir", "fs_rename",
+                 "memory_update", "memory_link", "memory_unlink", "memory_delete",
+                 # el code map como memoria del código: CONSULTAR un mapa ya escaneado
+                 "code_map_overview", "code_find", "code_who_calls", "code_calls",
+                 "code_impact"),
+    "files": ("code_map_scan",            # escanear lee código del disco: es de archivos
+              "fs_tree", "fs_read", "fs_write", "fs_edit", "fs_mkdir", "fs_rename",
               "fs_delete", "fs_grep", "sv_save", "sv_list", "sv_restore",
               "gh_push", "gh_pull", "gh_log"),
     "shell": ("fs_exec",),

@@ -78,14 +78,16 @@ cmd, _ = A.build_cmd(run, "claude", "x", "/w", "c", "p", "auto-edit", "sonnet", 
 check("no pasa --permission-prompt-tool", "--permission-prompt-tool" not in cmd)
 A.finalize(run)
 
-print("\n### C. conviven el MCP del editor externo y el de permisos")
+print("\n### C. conviven el MCP del editor externo, el de permisos y el del code map")
 run = nuevo_run()
 cmd, _ = A.build_cmd(run, "claude", "x", "/w", "c", "p", "auto-edit", "sonnet", None,
                      editor_relay={"url": "https://free-1.diagraminder.com",
                                    "token": "t", "projectId": "p1"})
 check("UN solo --mcp-config", cmd.count("--mcp-config") == 1)
 cfg = json.load(open(cmd[cmd.index("--mcp-config") + 1]))
-check("con los DOS servers", sorted(cfg["mcpServers"].keys()) == ["dmfs", "dmperm"])
+# + el del code map (doc 40 §Etapa 5), que el chat recibe siempre que hay backend
+check("con los TRES servers (editor, permisos y code map)",
+      sorted(cfg["mcpServers"].keys()) == ["dmcode", "dmfs", "dmperm"])
 check("las tools del editor siguen pre-aprobadas",
       "--allowedTools" in cmd and "mcp__dmfs__fs_read" in cmd[cmd.index("--allowedTools") + 1])
 A.finalize(run)

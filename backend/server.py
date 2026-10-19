@@ -69,7 +69,7 @@ DEFAULT_PORT = 8765
 # del orquestador necesitan la URL propia para hablarle al MCP del editor.
 PORT = DEFAULT_PORT
 NAME = "DiagraMinder"
-VERSION = "0.39.1"   # agy recibe el MCP del nodo GitHub (plugin) + reveal de la carpeta de datos
+VERSION = "0.40.0"   # el Code map como memoria del código: tools code_* (MCP, chat, orquestador)
 
 # ===================== rutas / disco =====================
 
@@ -699,6 +699,23 @@ def web_dir():
     bundled = os.path.join(getattr(sys, "_MEIPASS", ""), "web") if getattr(sys, "_MEIPASS", None) else None
     if bundled and os.path.isdir(bundled):
         return bundled
+    return None
+
+
+def codemap_runner():
+    """El analizador del Code map para node (doc 40 §Etapa 5). Viene con la WEB, no
+    con este repo (que es público): el `dist/codemap-node.mjs` ofuscado que arma el
+    build. Desde un checkout (DMN_WEB_DIR) sirve también el fuente sin compilar."""
+    d = os.environ.get("DMN_CODEMAP_RUNNER")
+    if d:
+        return d
+    base = web_dir()
+    if not base:
+        return None
+    for rel in ("dist/codemap-node.mjs", "app/codemap/nodeRunner.mjs"):
+        f = os.path.join(base, rel)
+        if os.path.exists(f):
+            return f
     return None
 
 
@@ -1515,6 +1532,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200 if ok else 409, {"ok": ok, "message": msg})
         elif path == "/state/write":
             self._state_write(self._read_json())
+        elif path in ("/codemap/scan", "/codemap/stamp"):
+            self._codemap(path, self._read_json())
         elif path == "/chat":
             self._chat(self._read_json())
         elif path == "/chat/permission/ask":
@@ -2080,6 +2099,65 @@ class Handler(BaseHTTPRequestHandler):
             # el cliente cerró la conexión SSE (reconexión normal del mirror) → fin tranquilo
             pass
 
+    def _codemap(self, path, body):
+        """POST /codemap/scan | /codemap/stamp (doc 40 §Etapa 5): escanea una carpeta con
+        el analizador de la web (node) o devuelve la marca actual de sus .js, para saber
+        si un mapa quedó viejo.
+
+        Lee código del disco, así que para el MCP vale lo mismo que /fs: el nivel tiene
+        que habilitar archivos y la carpeta tiene que caer DENTRO de la raíz elegida. Se
+        chequea ACÁ y no en el MCP (regla dura: una guarda en el cliente no es una
+        regla). `origin` lo dice quien llama; sin `origin` se asume el MCP, el caso MÁS
+        restringido — no se adivina para el lado de los permisos."""
+        import codemap
+        import mcp_policy as _mp
+        origin = (body.get("origin") or "mcp").strip().lower()
+        raw = str(body.get("path") or "").strip()
+        if origin == "web":
+            if not raw or not os.path.isabs(raw):
+                self._json(400, {"error": "path must be an absolute folder"})
+                return
+            folder = raw
+        elif origin == "agent":
+            # Un agente de la app (`--mcp-code`): solo dentro de SUS carpetas, que las
+            # fija el backend al lanzarlo (el modelo no las elige).
+            roots = [r for r in (body.get("roots") or []) if isinstance(r, str) and os.path.isabs(r)]
+            maps = {os.path.realpath(m) for m in (body.get("maps") or []) if isinstance(m, str) and os.path.isabs(m)}
+            folder = raw if os.path.isabs(raw) else (os.path.join(roots[0], raw) if roots else "")
+            # sus carpetas, con lo de adentro; un mapa existente, SOLO su ruta exacta
+            if not folder or not (any(_mp.dentro_de_root({"root": r}, folder) for r in roots)
+                                  or os.path.realpath(folder) in maps):
+                self._json(403, {"error": f"'{raw}' is outside the folders this agent can read "
+                                          f"({', '.join(roots) or 'none'})."})
+                return
+        else:
+            pol = mcp_policy()
+            if not _mp.permite(pol, "code_map_scan"):
+                self._json(403, {"error": _mp.motivo(pol, "code_map_scan")})
+                return
+            folder = raw if os.path.isabs(raw) else os.path.join(pol["root"], raw)
+            if not _mp.dentro_de_root(pol, folder):
+                self._json(403, {"error": f"'{raw}' is outside the folder the user gave DiagraMinder's "
+                                          f"MCP ({pol['root']}). Only folders inside it can be scanned."})
+                return
+        folder = os.path.realpath(folder)
+        if not os.path.isdir(folder):
+            self._json(404, {"error": f"no such folder: {folder}"})
+            return
+        if path == "/codemap/stamp":
+            self._json(200, {"path": folder, "stamp": codemap.stamp(folder)})
+            return
+        from cli_base import _find_bin
+        try:
+            text = codemap.scan(folder, _find_bin(["node"]), codemap_runner())
+        except codemap.CodeMapError as e:
+            self._json(422, {"error": str(e)})
+            return
+        except subprocess.TimeoutExpired:
+            self._json(504, {"error": "the analyzer took more than 5 minutes; the folder is too big"})
+            return
+        self._json(200, {"path": folder, "tree": text})
+
     def _state_write(self, body):
         """Write-through de la web: escribe tree.json y marca el mtime como ya
         visto para que el watcher NO devuelva el eco al que lo escribió.
@@ -2469,6 +2547,13 @@ def main():
     if "--mcp-diagrams" in sys.argv:
         import diagram_mcp
         diagram_mcp.main()
+        return
+
+    # El code map para los agentes de la PROPIA app (doc 40 §Etapa 5): el chat y el
+    # orquestador. Solo las code_*, confinado a DMD_SCAN_ROOTS (sus carpetas).
+    if "--mcp-code" in sys.argv:
+        import diagram_mcp
+        diagram_mcp.main("code")
         return
 
     # Imprime la config lista para pegar. Existe porque la alternativa es que la
