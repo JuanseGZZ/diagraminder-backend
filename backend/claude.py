@@ -14,7 +14,7 @@ from cli_base import _focus_note, _editor_note, _editor_relay_note, _find_bin
 # tools del MCP fs de editores externos (editor_mcp.py) — para --allowedTools
 # las del MCP del code map (`--mcp-code`): las mismas que recibe un agente del orquestador
 CODE_MAP_TOOLS = ["code_map_scan", "code_map_overview", "code_find", "code_who_calls",
-                  "code_calls", "code_impact"]
+                  "code_calls", "code_impact", "code_quality"]
 MCP_FS_TOOLS = ["fs_tree", "fs_read", "fs_write", "fs_mkdir", "fs_rename",
                 "fs_delete", "fs_grep", "fs_exec",
                 "sv_save", "sv_list", "sv_restore",

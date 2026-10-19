@@ -302,6 +302,19 @@ CODE_TOOLS = [
         "inputSchema": _schema({**_MAPA, "target": {"type": "string", "description": "a file path, or a symbol (name, Class.method, path:name, path:line)"}},
                                ["target"]),
     },
+    {
+        "name": "code_quality",
+        "description": (
+            "Code quality findings of the map, most serious first: complex, long and "
+            "many-parameter functions, functions that call too much or are used from many "
+            "files, big files, files with many responsibilities or imports, import cycles — "
+            "each with path:line, the measured value and the threshold, plus the files that "
+            "concentrate them (hotspots). Pass `file` for one file. These are pointers to look "
+            "at, not a verdict: use them to pick what to refactor, then code_impact before "
+            "touching it."),
+        "inputSchema": _schema({**_MAPA, "file": {"type": "string", "description": "only findings in this file"},
+                                "limit": {"type": "integer", "description": "default 30"}}, []),
+    },
 ]
 TOOLS = TOOLS + CODE_TOOLS
 _NOMBRES_CODIGO = {t["name"] for t in CODE_TOOLS}
@@ -540,6 +553,8 @@ def _codigo(name, args):
             return _cm.calls(g, fresco, args.get("symbol"), args.get("depth") or 2), False
         if name == "code_impact":
             return _cm.impact(g, fresco, args.get("target") or args.get("symbol")), False
+        if name == "code_quality":
+            return _cm.quality(g, fresco, args.get("file") or "", int(args.get("limit") or 30)), False
     except _cm.CodeMapError as e:
         return str(e), True
     return f"unknown tool: {name}", True

@@ -2350,7 +2350,7 @@ CODE_MAP_NOTE = (
     "CODE MAPS: the `mcp__dmcode__*` tools answer how code is wired without reading it — "
     "code_map_overview (start here), code_find, code_who_calls, code_calls and, BEFORE you "
     "change a function or a file, code_impact (who depends on it, which user actions reach "
-    "it). After editing code, call code_map_scan on that folder so the map stays true. "
+    "it); code_quality lists complex/long functions and coupled files to refactor. After editing code, call code_map_scan on that folder so the map stays true. "
     "They are static analysis of JavaScript only: dynamic calls are not seen.")
 
 

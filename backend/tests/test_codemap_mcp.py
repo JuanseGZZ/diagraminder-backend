@@ -184,8 +184,8 @@ try:
 
     print("\n### A. los niveles: consultar es de «diagrams», escanear es de «files»")
     tools = mcp.lista()
-    consultas = ["code_calls", "code_find", "code_impact", "code_map_overview", "code_who_calls"]
-    check("en «diagrams» están las 5 que CONSULTAN un mapa", all(t in tools for t in consultas), str(tools))
+    consultas = ["code_calls", "code_find", "code_impact", "code_map_overview", "code_quality", "code_who_calls"]
+    check("en «diagrams» están las 6 que CONSULTAN un mapa", all(t in tools for t in consultas), str(tools))
     check("pero NO code_map_scan (lee código del disco)", "code_map_scan" not in tools, str(tools))
     txt, err = mcp.tool("code_map_scan", {})
     check("llamarla igual se rechaza explicando cómo destrabarlo", err and "Settings" in txt, txt[:160])
@@ -271,6 +271,15 @@ try:
         txt, err = mcp.tool("code_impact", {"target": "store.js"})
         check("code_impact de un archivo: quién lo importa, qué se usa de afuera y el ciclo",
               not err and "Imported by 2" in txt and "CYCLE" in txt and "save" in txt, txt[:600])
+        txt, err = mcp.tool("code_quality", {})
+        check("code_quality: el ciclo como hallazgo ALTO, con los archivos que lo forman",
+              not err and "[HIGH] Import cycles" in txt and "proj/store.js" in txt and "proj/view.js" in txt, txt[:600])
+        check("…con los puntos calientes y su puntaje explicado", "Hotspots" in txt and "import cycle ×1" in txt, txt[:600])
+        check("…y dice qué mide cada regla (no es una nota)", "not a verdict" in txt and "What the rules measure" in txt, txt[-400:])
+        txt, err = mcp.tool("code_quality", {"file": "main.js"})
+        check("code_quality de un archivo sin hallazgos dice (none)", not err and "(none)" in txt, txt[:400])
+        txt, err = mcp.tool("code_impact", {"target": "save"})
+        check("code_impact suma el tamaño y la complejidad de la función", "parameters, cyclomatic complexity" in txt, txt[:300])
         txt, err = mcp.tool("code_impact", {"target": "noexiste"})
         check("un símbolo que no existe manda a code_find", err and "code_find" in txt, txt[:200])
 
@@ -327,6 +336,9 @@ try:
         txt, err = mcp.tool("code_map_overview", {"map": "Del navegador"})
         check("el del navegador no tiene marcas: dice que no puede saber si está al día",
               not err and "Scanned in the browser" in txt, txt[:300])
+        txt, err = mcp.tool("code_quality", {"map": "Del navegador"})
+        check("un mapa de antes de la calidad pide re-escanear (no inventa hallazgos)",
+              err and "code_map_scan" in txt, txt[:200])
 
     print("\n### I. sin node o sin analizador: un error que el modelo entiende (sin instalar nada)")
     try:
@@ -348,9 +360,9 @@ try:
     try:
         code.pedir("initialize", {"protocolVersion": "2024-11-05"})
         tl = code.lista()
-        check("lista SOLO las 6 code_* (con escanear), aunque el MCP del usuario esté en «diagrams»",
+        check("lista SOLO las 7 code_* (con escanear), aunque el MCP del usuario esté en «diagrams»",
               tl == sorted(["code_map_scan", "code_map_overview", "code_find", "code_who_calls",
-                            "code_calls", "code_impact"]), str(tl))
+                            "code_calls", "code_impact", "code_quality"]), str(tl))
         txt, err = code.tool("list_diagrams")
         check("una tool que no es del code map no existe acá", err and "unknown" in txt, txt[:120])
         txt, err = code.tool("code_map_scan", {"path": afuera})

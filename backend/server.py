@@ -69,7 +69,7 @@ DEFAULT_PORT = 8765
 # del orquestador necesitan la URL propia para hablarle al MCP del editor.
 PORT = DEFAULT_PORT
 NAME = "DiagraMinder"
-VERSION = "0.40.0"   # el Code map como memoria del código: tools code_* (MCP, chat, orquestador)
+VERSION = "0.41.0"   # code_quality: los hallazgos de calidad del Code map (etapa 7)
 
 # ===================== rutas / disco =====================
 

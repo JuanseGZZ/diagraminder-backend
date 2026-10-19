@@ -174,6 +174,9 @@ class Graph:
         self.cycles = g.get("cycles") or []
         self.classes = g.get("classes") or []
         self.lens = g.get("lens") or []
+        self.params = g.get("params")       # etapa 7: ausentes en un mapa de antes
+        self.cx = g.get("cx")
+        self.quality = g.get("quality")
         self.exported = set(g.get("exported") or [])
         self.uses = {u[0]: u[1] for u in g.get("uses") or [] if isinstance(u, list) and len(u) == 2}
         self.registers = {}            # función → eventos que registra
@@ -505,6 +508,9 @@ def impact(g, fresh_text, target):
     i = g.resolve(t)
     f = g.fns[i]
     out.append(f"Impact of changing {g.row(i)}:")
+    if g.cx and f["kind"] not in ("module", "class"):
+        out.append(f"- Size: {g.lens[i] if i < len(g.lens) else '?'} lines, {g.params[i] if g.params else '?'} "
+                   f"parameters, cyclomatic complexity {g.cx[i]}.")
     if f["kind"] == "event":
         p = f.get("parent")
         out.append("- It is an event listener: the browser fires it; nothing in the code calls it." +
@@ -546,4 +552,66 @@ def impact(g, fresh_text, target):
         out.append(f"- {len(by_name)} caller edge(s) were matched BY NAME only: verify them.")
     out.append("Static analysis can't see dynamic calls (obj[k]()), callbacks handed to libraries, "
                "or calls from HTML. After you edit, call code_map_scan so the map stays true.")
+    return "\n".join(out)
+
+
+def quality(g, fresh_text, file="", limit=30):
+    """code_quality: los hallazgos que calculó el analizador (app/codemap/quality.js) al
+    escanear — las reglas viven en UN lugar, en JS; acá solo se formatean."""
+    q = g.quality
+    if not isinstance(q, dict):
+        raise CodeMapError("this map has no quality data (it was scanned before that existed). "
+                           "Refresh it with code_map_scan.")
+    rules = q.get("rules") or {}
+    sev_name = ["info", "warn", "HIGH"]
+    st = q.get("stats") or {}
+    out = [_header(g, fresh_text), "",
+           "Quality findings — pointers to look at, not a verdict. Each says the rule, the measured "
+           "value and the threshold.",
+           f"{st.get('functions', '?')} functions · average cyclomatic complexity {st.get('avgCx', '?')} · "
+           f"highest {st.get('maxCx', '?')} · {st.get('unresolved', 0)} calls could not be resolved (dynamic)."]
+    fidx = None
+    if file:
+        fidx = set(g.match_files(file))
+        if not fidx:
+            raise CodeMapError(f"no file '{file}' in this map.")
+
+    def where(rule, idx):
+        on = (rules.get(rule) or {}).get("on")
+        if on == "fn":
+            return g.row(idx), {g.fns[idx]["file"]}
+        if on == "file":
+            return g.files[idx], {idx}
+        cyc = g.cycles[idx] if idx < len(g.cycles) else []
+        return (f"{len(cyc)} files importing each other: " + ", ".join(g.files[x] for x in cyc[:6]) +
+                (" …" if len(cyc) > 6 else "") + " (code_impact on one of them shows its part)"), set(cyc)
+
+    if not fidx:
+        hs = q.get("hotspots") or []
+        if hs:
+            out += ["", "Hotspots (score = 3 per HIGH finding + 1 per warning):"]
+            for fi, score, by in hs[:10]:
+                out.append(f"  {g.files[fi]}  score {score}: " +
+                           ", ".join(f"{(rules.get(r) or {}).get('short') or r} ×{n}" for r, n in by.items()))
+    out += ["", "Findings, most serious first:" if not fidx else f"Findings in {', '.join(g.files[x] for x in fidx)}:"]
+    shown = 0
+    for rule, sev, idx, val in q.get("findings") or []:
+        text, files = where(rule, idx)
+        if fidx and not (files & fidx):
+            continue
+        if shown >= limit:
+            shown += 1
+            continue
+        r = rules.get(rule) or {}
+        thr = f"≥ {r.get('warn')}" if sev < 2 or not r.get("high") else f"≥ {r.get('high')}"
+        medida = "" if r.get("on") == "cycle" else f"  ({val}, threshold {thr})"
+        out.append(f"  [{sev_name[sev]}] {r.get('title', rule)}: {text}{medida}")
+        shown += 1
+    if shown == 0:
+        out.append("  (none)")
+    elif shown > limit:
+        out.append(f"  … {shown - limit} more: raise `limit` or pass `file`.")
+    used = sorted({f[0] for f in q.get("findings") or []})
+    if used:
+        out += ["", "What the rules measure:"] + [f"  {(rules.get(r) or {}).get('title', r)}: {(rules.get(r) or {}).get('why', '')}" for r in used]
     return "\n".join(out)

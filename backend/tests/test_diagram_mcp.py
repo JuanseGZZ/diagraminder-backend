@@ -24,11 +24,12 @@ SERVER = os.path.join(BACKEND, "server.py")
 ok = fail = 0
 
 # Las del nivel "diagramas": las 5 de siempre + las 8 de memoria (diagram_memory.py)
-# + las 5 que CONSULTAN un code map (codemap.py; escanear es del nivel "files")
+# + las 6 que CONSULTAN un code map (codemap.py; escanear es del nivel "files")
 DIAGRAM_TOOLS = sorted(["diagram_schema", "list_diagrams", "read_diagram", "write_diagram", "create_diagram",
                         "memory_overview", "memory_search", "memory_read", "memory_add",
                         "memory_update", "memory_link", "memory_unlink", "memory_delete",
-                        "code_map_overview", "code_find", "code_who_calls", "code_calls", "code_impact"])
+                        "code_map_overview", "code_find", "code_who_calls", "code_calls", "code_impact",
+                        "code_quality"])
 
 
 def check(nombre, cond, extra=""):
@@ -119,7 +120,7 @@ try:
     check("initialize responde", (r.get("result") or {}).get("serverInfo", {}).get("name") == "diagraminder",
           json.dumps(r)[:120])
     tools = [t["name"] for t in (mcp.pedir("tools/list").get("result") or {}).get("tools", [])]
-    check("declara las 18 tools de diagramas (5 de JSON + 8 de memoria + 5 del code map)",
+    check("declara las 19 tools de diagramas (5 de JSON + 8 de memoria + 6 del code map)",
           sorted(tools) == DIAGRAM_TOOLS, str(tools))
 
     print("\n### B. ver lo que hay")
@@ -378,7 +379,7 @@ try:
     check("el rechazo dice DÓNDE prenderlo", "Settings" in txt, txt[:140])
 
     politica(enabled=True)
-    check("al prenderlo vuelven las 18 de diagramas", lista() == DIAGRAM_TOOLS, str(lista()))
+    check("al prenderlo vuelven las 19 de diagramas", lista() == DIAGRAM_TOOLS, str(lista()))
     txt, err = mcp.tool("read_diagram", {"name": "Mapa"})
     check("…y vuelve a funcionar", not err, txt[:100])
 

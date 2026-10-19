@@ -12,7 +12,7 @@ en cada `tools/call`, y el backend vuelve a chequear en `/fs` antes de tocar un 
 
 Los tres niveles son acumulativos:
 
-    diagrams  los 5 tools de diagramas, las 8 de memoria (memory_*) y las 5 que CONSULTAN
+    diagrams  los 5 tools de diagramas, las 8 de memoria (memory_*) y las 6 que CONSULTAN
               un code map ya escaneado (code_*). Es el default.
     files     + leer/escribir/editar/grep/git y escanear código (code_map_scan),
               CONFINADO a `root`.
@@ -37,7 +37,7 @@ TOOLS_POR_NIVEL = {
                  "memory_update", "memory_link", "memory_unlink", "memory_delete",
                  # el code map como memoria del código: CONSULTAR un mapa ya escaneado
                  "code_map_overview", "code_find", "code_who_calls", "code_calls",
-                 "code_impact"),
+                 "code_impact", "code_quality"),
     "files": ("code_map_scan",            # escanear lee código del disco: es de archivos
               "fs_tree", "fs_read", "fs_write", "fs_edit", "fs_mkdir", "fs_rename",
               "fs_delete", "fs_grep", "sv_save", "sv_list", "sv_restore",
