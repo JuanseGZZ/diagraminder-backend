@@ -340,6 +340,33 @@ try:
         check("un mapa de antes de la calidad pide re-escanear (no inventa hallazgos)",
               err and "code_map_scan" in txt, txt[:200])
 
+    if PUEDE_ESCANEAR:
+        print("\n### H2. un mapa del NAVEGADOR (sin ruta) se adopta al re-escanear, si es el mismo proyecto")
+        web2 = os.path.join(codigo, "web2")
+        os.makedirs(web2, exist_ok=True)
+        with open(os.path.join(web2, "a.js"), "w", encoding="utf-8") as f:
+            f.write("export function uno() { return 1; }\n")
+
+        def mapa_nav(nombre, archivos):
+            d = os.path.join(root, "Local", nombre)
+            os.makedirs(d, exist_ok=True)
+            with open(os.path.join(d, "tree.json"), "w", encoding="utf-8") as f:
+                json.dump({"type": "codemap", "scan": {"root": "web2", "at": 1, "files": len(archivos), "skipped": 0},
+                           "graph": dict(web["graph"], root="web2", files=[{"path": a, "lines": 1} for a in archivos],
+                                         fns=[["(module)", 0, 1, 3]], lens=[1])}, f)
+        mapa_nav("Otro web2", ["web2/zzz.js", "web2/yyy.js"])     # se llama igual, pero es OTRO proyecto
+        mapa_nav("Mio web2", ["web2/a.js"])
+        txt, err = mcp.tool("code_map_scan", {"path": "web2"})
+        check("re-escanear la carpeta refresca el mapa del navegador que coincide (no crea otro)",
+              not err and "'Mio web2' refreshed" in txt, txt[:200])
+        txt, _ = mcp.tool("code_map_overview", {"map": "Mio web2"})
+        check("…y desde ahí tiene ruta: el agente sabe si está al día", "map is current" in txt, txt[:200])
+        txt, err = mcp.tool("code_map_scan", {"path": "web2", "map": "Otro web2"})
+        check("el homónimo de OTRO proyecto no se pisa (menos de la mitad de sus archivos)",
+              err and "different folder" in txt, txt[:200])
+        txt, _ = mcp.tool("list_diagrams")
+        check("…y no se creó un mapa nuevo de web2", not any(f["name"] == "Code map web2" for f in json.loads(txt)), txt[:300])
+
     print("\n### I. sin node o sin analizador: un error que el modelo entiende (sin instalar nada)")
     try:
         codemap.scan(proj, None, RUNNER)
@@ -420,6 +447,81 @@ try:
     sysp = cmd[cmd.index("--append-system-prompt") + 1]
     check("chat: el preámbulo dice que un codemap no se lee ni se edita a mano", "codemap" in sysp and "NEVER read or edit" in sysp)
     os.remove(cfg)
+
+    BUNDLE = os.path.realpath(os.path.join(BACKEND, "..", "..", "dist", "codemap-node.mjs"))
+    if NODE and os.path.exists(BUNDLE):
+        print("\n### M. el backend SOLO (sin la web) se baja el analizador del sitio")
+        import http.server as _hs
+        import threading
+        sirve = {"ok": True}
+
+        class H(_hs.BaseHTTPRequestHandler):
+            def do_GET(self):
+                if not sirve["ok"]:
+                    self.send_response(503); self.end_headers(); return
+                if self.path.endswith("/portal.mjs"):
+                    body = b"<html>login to the wifi</html>" * 100
+                else:
+                    body = open(BUNDLE, "rb").read()
+                self.send_response(200); self.send_header("Content-Length", str(len(body))); self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+        web_srv = _hs.ThreadingHTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=web_srv.serve_forever, daemon=True).start()
+        url = f"http://127.0.0.1:{web_srv.server_address[1]}"
+        home2 = tempfile.mkdtemp(prefix="dmcodemap-solo-")
+
+        def backend_solo(codemap_url):
+            port2 = puerto_libre()
+            env2 = {k: v for k, v in env.items() if k not in ("DMN_CODEMAP_RUNNER", "DMN_WEB_DIR")}
+            env2.update(HOME=home2, USERPROFILE=home2, LOCALAPPDATA=home2, DMN_CODEMAP_URL=codemap_url)
+            p2 = subprocess.Popen([sys.executable, SERVER, "--port", str(port2), "--no-ui"],
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env2)
+            b2 = f"http://127.0.0.1:{port2}"
+            for _ in range(60):
+                try:
+                    urllib.request.urlopen(b2 + "/health", timeout=1).read()
+                    break
+                except Exception:
+                    time.sleep(0.25)
+            t2 = ""
+            for raiz, _, archivos in os.walk(home2):
+                if "token.txt" in archivos:
+                    t2 = open(os.path.join(raiz, "token.txt")).read().strip()
+            return p2, b2, t2
+
+        def escanear_solo(b2, t2):
+            req = urllib.request.Request(f"{b2}/codemap/scan?token={t2}", method="POST",
+                                         data=json.dumps({"path": proj, "origin": "web"}).encode(),
+                                         headers={"Content-Type": "application/json"})
+            try:
+                with urllib.request.urlopen(req, timeout=120) as r:
+                    return r.status, json.loads(r.read())
+            except urllib.error.HTTPError as e:
+                return e.code, json.loads(e.read() or b"{}")
+        try:
+            p2, b2, t2 = backend_solo(url + "/portal.mjs")
+            st, r = escanear_solo(b2, t2)
+            check("un 200 que NO es el analizador (un portal del wifi) no se guarda ni se ejecuta",
+                  st == 422 and "no code analyzer" in r.get("error", ""), f"{st} {str(r)[:160]}")
+            p2.terminate(); p2.wait(timeout=5)
+            p2, b2, t2 = backend_solo(url + "/dist/codemap-node.mjs")
+            st, r = escanear_solo(b2, t2)
+            check("sin la web, escanear igual anda: se baja el analizador", st == 200 and "tree" in r, f"{st} {str(r)[:160]}")
+            cache = [os.path.join(d, f) for d, _, fs in os.walk(home2) for f in fs if f == "codemap-node.mjs"]
+            check("…y queda guardado en la carpeta de datos", len(cache) == 1, str(cache))
+            sirve["ok"] = False
+            if cache:
+                viejo = time.time() - 3 * 24 * 3600
+                os.utime(cache[0], (viejo, viejo))       # vencido Y sin red
+            st, r = escanear_solo(b2, t2)
+            check("sin red, sigue con el que tenía (aunque esté vencido)", st == 200 and "tree" in r, f"{st} {str(r)[:160]}")
+            p2.terminate(); p2.wait(timeout=5)
+        finally:
+            web_srv.shutdown()
+            shutil.rmtree(home2, ignore_errors=True)
 
     print("\n### J. apagado, no hay nada")
     politica(enabled=False)

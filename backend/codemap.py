@@ -86,9 +86,11 @@ def scan(root, node_bin, runner):
                            "computer (or not on a path DiagraMinder knows). Ask the user to "
                            "install it from nodejs.org — do not install it yourself.")
     if not runner or not os.path.exists(runner):
-        raise CodeMapError("this DiagraMinder backend has no code analyzer (it ships with the "
-                           "desktop app, not with the backend alone). Ask the user to use "
-                           "the DiagraMinder app, or to scan the folder from the Code map mode.")
+        raise CodeMapError("this DiagraMinder backend has no code analyzer: it ships with the "
+                           "desktop app, and the backend alone downloads it from diagraminder.com "
+                           "the first time — that download failed (no internet?). Ask the user to "
+                           "retry with internet, use the desktop app, or scan the folder from the "
+                           "Code map mode.")
     root = os.path.realpath(root)
     files, skipped = walk(root)
     if not files:

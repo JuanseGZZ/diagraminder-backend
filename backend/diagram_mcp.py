@@ -593,6 +593,30 @@ def _escanear(args):
     if nombre:
         previo = [m for m in mapas if m[1] == nombre] or []
     obj = json.loads(texto)
+    pedido_mapa = (args.get("map") or "").strip()
+    if pedido_mapa and not nombre:
+        # el mapa que se pidió, y no otro: aunque haya uno de esta carpeta
+        hit = [m for m in mapas if m[1] == pedido_mapa]
+        if not hit:
+            return f"no code map named '{pedido_mapa}'.", True
+        suya = (hit[0][2].get("scan") or {}).get("path")
+        if suya and suya != ruta:
+            return (f"'{pedido_mapa}' is the map of {suya}, not of {ruta}: it was NOT overwritten. "
+                    "Scan its own folder to refresh it, or pass a new `name`."), True
+        if not suya and _solapamiento(hit[0][2], obj) < 0.5:
+            return (f"'{pedido_mapa}' was scanned from a different folder than {ruta} (less than half of "
+                    "its files match), so it was NOT overwritten. Pass a new `name` to create a separate map."), True
+        previo = hit
+    if not previo:
+        # Un mapa escaneado en el NAVEGADOR no sabe su ruta (el selector no la da): solo
+        # el nombre de la carpeta. Se adopta —se refresca ese en vez de crear otro— si
+        # coincide el nombre Y al menos la mitad de sus archivos: dos proyectos que se
+        # llaman `app` no son el mismo, y pisar el mapa equivocado sería peor que duplicar.
+        cands = [(m, _solapamiento(m[2], obj)) for m in mapas if not (m[2].get("scan") or {}).get("path")
+                 and ((m[2].get("scan") or {}).get("root") or (m[2].get("graph") or {}).get("root")) == os.path.basename(ruta)]
+        buenos = sorted([c for c in cands if c[1] >= 0.5], key=lambda c: -c[1])
+        if len(buenos) == 1 or (len(buenos) > 1 and buenos[0][1] > buenos[1][1]):
+            previo = [buenos[0][0]]
     resumen = (f"{(obj.get('scan') or {}).get('files')} files, {len(obj['graph']['fns'])} functions/events, "
                f"{len(obj['graph']['calls'])} call edges")
     if previo:
@@ -621,6 +645,17 @@ def _escanear(args):
     return (f"OK: code map '{nombre}' created in folder '{carpeta}' from {ruta} — {resumen}{aviso}. "
             "Query it with code_map_overview / code_find / code_impact; after you edit code, "
             "call code_map_scan again to refresh it."), False
+
+
+def _solapamiento(viejo, nuevo):
+    """Qué parte de los archivos de un mapa viejo está en el escaneo nuevo (0..1). Las
+    rutas del grafo van con la carpeta adelante (`app/x.js`); las de la marca, sin ella."""
+    def rels(o):
+        return {p.split("/", 1)[1] if "/" in p else p for p in
+                (f.get("path", "") for f in ((o.get("graph") or {}).get("files") or []))}
+    a = rels(viejo)
+    b = set(((nuevo.get("scan") or {}).get("stamp") or {}).keys()) or rels(nuevo)
+    return len(a & b) / len(a) if a else 0.0
 
 
 def _tipos_con_esquema():

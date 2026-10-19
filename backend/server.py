@@ -69,7 +69,7 @@ DEFAULT_PORT = 8765
 # del orquestador necesitan la URL propia para hablarle al MCP del editor.
 PORT = DEFAULT_PORT
 NAME = "DiagraMinder"
-VERSION = "0.41.0"   # code_quality: los hallazgos de calidad del Code map (etapa 7)
+VERSION = "0.42.0"   # el backend solo se baja el analizador; un mapa del navegador se adopta al re-escanear
 
 # ===================== rutas / disco =====================
 
@@ -702,21 +702,56 @@ def web_dir():
     return None
 
 
+CODEMAP_URL = "https://diagraminder.com/dist/codemap-node.mjs"
+CODEMAP_TTL = 24 * 3600
+
+
 def codemap_runner():
     """El analizador del Code map para node (doc 40 §Etapa 5). Viene con la WEB, no
     con este repo (que es público): el `dist/codemap-node.mjs` ofuscado que arma el
-    build. Desde un checkout (DMN_WEB_DIR) sirve también el fuente sin compilar."""
+    build. Desde un checkout (DMN_WEB_DIR) sirve también el fuente sin compilar.
+
+    El backend SOLO (su release, o `python server.py` sin la web) no lo trae: se lo baja
+    del sitio la primera vez que hace falta y lo guarda en la carpeta de datos. Es el
+    mismo archivo que el sitio ya le sirve a cualquiera (ofuscado), por HTTPS y desde el
+    dominio de la app: la misma confianza que la web. Se renueva una vez por día; si no
+    hay red, sigue el que estaba."""
     d = os.environ.get("DMN_CODEMAP_RUNNER")
     if d:
         return d
     base = web_dir()
-    if not base:
-        return None
-    for rel in ("dist/codemap-node.mjs", "app/codemap/nodeRunner.mjs"):
-        f = os.path.join(base, rel)
-        if os.path.exists(f):
-            return f
-    return None
+    if base:
+        for rel in ("dist/codemap-node.mjs", "app/codemap/nodeRunner.mjs"):
+            f = os.path.join(base, rel)
+            if os.path.exists(f):
+                return f
+    return _codemap_runner_bajado()
+
+
+def _codemap_runner_bajado():
+    dest = os.path.join(app_dir(), "codemap", "codemap-node.mjs")
+    try:
+        fresco = os.path.exists(dest) and time.time() - os.path.getmtime(dest) < CODEMAP_TTL
+    except OSError:
+        fresco = False
+    if fresco:
+        return dest
+    url = os.environ.get("DMN_CODEMAP_URL") or CODEMAP_URL
+    try:
+        with urllib.request.urlopen(url, timeout=20) as r:
+            data = r.read()
+        # un 200 que no es el analizador (una página de error, un portal cautivo) no se
+        # guarda: node lo ejecutaría
+        if len(data) < 1000 or b"analyzer" not in data[:400]:
+            raise ValueError("unexpected content")
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        tmp = dest + ".tmp"
+        with open(tmp, "wb") as f:
+            f.write(data)
+        os.replace(tmp, dest)
+    except Exception:
+        pass                      # sin red: el que estaba (aunque sea viejo) o nada
+    return dest if os.path.exists(dest) else None
 
 
 # Solo estas raíces se sirven. Una lista blanca y no "todo lo que cuelgue del dir"
