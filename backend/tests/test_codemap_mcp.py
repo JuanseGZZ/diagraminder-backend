@@ -454,6 +454,7 @@ try:
             "lib/types.ts": "export interface Doc { id?: string }\n",
             "App.tsx": "import { save } from '@lib/store';\nexport function App() { return <button onClick={() => save({})}>Save</button>; }\n",
             "global.d.ts": "declare const VERSION: string;\n",
+            "worker/jobs.py": "def run():\n    pass\n",
         }.items():
             p2 = os.path.join(tsp, rel)
             os.makedirs(os.path.dirname(p2), exist_ok=True)
@@ -462,6 +463,11 @@ try:
         txt, err = mcp.tool("code_map_scan", {"path": "tsproj"})
         check("code_map_scan de un proyecto TS: 3 archivos (.ts y .tsx), el .d.ts afuera",
               not err and "3 files" in txt, txt[:200])
+        check("…y dice lo que dejó AFUERA por el lenguaje (1 .py), no lo calla",
+              "NOT in the map" in txt and "1 .py" in txt, txt[:300])
+        txt, err = mcp.tool("code_map_overview", {"map": "Code map tsproj"})
+        check("el overview también lo dice, y que no suponga que eso no tiene callers",
+              "1 .py" in txt and "don't assume" in txt, txt[:400])
         txt, err = mcp.tool("code_who_calls", {"map": "Code map tsproj", "symbol": "lib/store.ts:save"})
         check("un símbolo `ruta.ts:nombre` se resuelve (antes la regex solo aceptaba .js)", not err and "Who calls" in txt, txt[:200])
         txt, err = mcp.tool("code_who_calls", {"map": "Code map tsproj", "symbol": "save"})

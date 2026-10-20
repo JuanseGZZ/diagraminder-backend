@@ -647,8 +647,10 @@ def _escanear(args):
         buenos = sorted([c for c in cands if c[1] >= 0.5], key=lambda c: -c[1])
         if len(buenos) == 1 or (len(buenos) > 1 and buenos[0][1] > buenos[1][1]):
             previo = [buenos[0][0]]
+    unsup = (obj.get("scan") or {}).get("unsupported") or {}
     resumen = (f"{(obj.get('scan') or {}).get('files')} files, {len(obj['graph']['fns'])} functions/events, "
-               f"{len(obj['graph']['calls'])} call edges")
+               f"{len(obj['graph']['calls'])} call edges" +
+               (f"; NOT in the map (language not analyzed yet): " + ", ".join(f"{n} .{e}" for e, n in sorted(unsup.items())) if unsup else ""))
     if previo:
         carpeta, nombre_real, _ = previo[0]
         res2, err = _api("/state/write", {"folder": carpeta, "name": nombre_real, "treeJson": texto, "origin": "mcp"})

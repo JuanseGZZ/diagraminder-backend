@@ -69,7 +69,7 @@ DEFAULT_PORT = 8765
 # del orquestador necesitan la URL propia para hablarle al MCP del editor.
 PORT = DEFAULT_PORT
 NAME = "DiagraMinder"
-VERSION = "0.44.0"   # Code map: TypeScript y JSX (lee .ts/.tsx, alias del tsconfig)
+VERSION = "0.45.0"   # Code map: endpoints, enlace HTTP, props de React, lo que queda afuera por lenguaje
 
 # ===================== rutas / disco =====================
 

@@ -34,11 +34,28 @@ MAX_BYTES = int(1.5 * 1024 * 1024)
 # JS, TypeScript y JSX (paso 3); un .d.ts son solo tipos. La MISMA regla que isJsPath.
 _JS = re.compile(r"\.(m?js|cjs|jsx|m?ts|cts|tsx)$", re.I)
 _MIN = re.compile(r"(\.min\.js|\.d\.[mc]?ts)$", re.I)
+# Código que el mapa TODAVÍA no analiza: se cuenta y se dice («2 .py not in the map»). La
+# MISMA lista que unsupportedExt de analyzer.js.
+_UNSUP = re.compile(r"\.(py|java|go|rb|php|cs|kt|kts|rs|swift|scala|vue|svelte|c|cc|cpp|h|hpp)$", re.I)
+_UNSUP_DIRS = {"venv", ".venv", "__pycache__"}
 
 KINDS = ["function", "method", "event", "module", "class"]
 HOW = {"import": "via import", "local": "same scope", "this": "this.", "name": "BY NAME (less certain)",
        "fires": "FIRES it from code (el.click() / dispatchEvent)",
-       "type": "via the DECLARED TYPE (x: Class / new Class())"}
+       "type": "via the DECLARED TYPE (x: Class / new Class())",
+       "prop": "calls a PROP the parent passed (<C onX={…}>)",
+       "http": "calls the ENDPOINT over HTTP (fetch / axios, matched by method + route)"}
+
+
+def _is_endpoint(g, i):
+    """Un endpoint (`router.post("/x", h)`) es una puerta de entrada como un evento, pero lo
+    corre el SERVIDOR en cada request, no el navegador: el texto lo tiene que decir."""
+    f = g.fns[i]
+    return f["kind"] == "event" and (f.get("event") or {}).get("type") == "request"
+
+
+def _who_fires(g, i):
+    return "the SERVER runs it on each request" if _is_endpoint(g, i) else "the BROWSER fires it"
 
 
 class CodeMapError(Exception):
@@ -52,14 +69,18 @@ def is_js(name):
     return bool(_JS.search(name)) and not _MIN.search(name)
 
 
-def walk(root):
+def walk(root, unsupported=None):
     """{ruta relativa con '/': (absoluta, mtime_ms, size)} y cuántos se saltearon.
     No sigue symlinks de carpetas: un link a `/` no convierte el escaneo en el disco."""
     out, skipped = {}, 0
+    unsupported = {} if unsupported is None else unsupported
     for d, dirs, files in os.walk(root):
-        dirs[:] = sorted(x for x in dirs if x not in SKIP_DIRS and not x.startswith("."))
+        dirs[:] = sorted(x for x in dirs if x not in SKIP_DIRS and x not in _UNSUP_DIRS and not x.startswith("."))
         for f in sorted(files):
             if not is_js(f):
+                m = _UNSUP.search(f)
+                if m:
+                    unsupported[m.group(1).lower()] = unsupported.get(m.group(1).lower(), 0) + 1
                 continue
             full = os.path.join(d, f)
             try:
@@ -95,7 +116,8 @@ def scan(root, node_bin, runner):
                            "retry with internet, use the desktop app, or scan the folder from the "
                            "Code map mode.")
     root = os.path.realpath(root)
-    files, skipped = walk(root)
+    unsupported = {}   # «2 .py not in the map»: lo que el lenguaje todavía no permite analizar
+    files, skipped = walk(root, unsupported)
     if not files:
         raise CodeMapError(f"no JavaScript or TypeScript files in {root} (node_modules, dist, vendor, "
                            "build, minified files and .d.ts are skipped).")
@@ -106,6 +128,7 @@ def scan(root, node_bin, runner):
             sources[f"{base}/{rel}"] = fh.read()
     scan_info = {"root": base, "at": int(time.time() * 1000), "files": len(files),
                  "skipped": skipped, "path": root, "by": "backend",
+                 "unsupported": unsupported,
                  "stamp": {rel: [m, s] for rel, (_, m, s) in files.items()}}
     payload = {"root": base, "sources": sources, "scan": scan_info}
     # los alias de un monorepo TS (`compilerOptions.paths`): el texto va crudo, lo entiende el
@@ -329,6 +352,10 @@ def overview(g, fresh_text, max_files=60):
     lines = [_header(g, fresh_text), "",
              f"{f_count} files · {kinds.get('function', 0)} functions · {kinds.get('method', 0)} methods · "
              f"{len(g.classes)} classes · {kinds.get('event', 0)} event listeners · {len(g.calls)} call edges"]
+    unsup = (g.tree.get("scan") or {}).get("unsupported") or {}
+    if unsup:
+        lines.append("NOT in the map (languages not analyzed yet — don't assume they have no callers): " +
+                     ", ".join(f"{n} .{e}" for e, n in sorted(unsup.items())))
     if g.file_err:
         lines.append(f"Files that did not parse (their code is NOT in the map): " +
                      ", ".join(f"{g.files[i]}:{(e or {}).get('line') or '?'}" for i, e in list(g.file_err.items())[:10]))
@@ -465,11 +492,11 @@ def who_calls(g, fresh_text, symbol, depth=2):
     out = [_header(g, fresh_text), "", f"Who calls {g.row(i)} (up to {depth} levels):"]
     if f["kind"] == "event":
         p = f.get("parent")
-        out.append("  The BROWSER fires an event listener" +
+        out.append(f"  An entry point: {_who_fires(g, i)}" +
                    (f"; it is registered in {g.row(p)}." if p is not None else "."))
         if not g.inc[i]:
             return "\n".join(out)
-        out.append("  It is ALSO fired from code (el.click() / dispatchEvent) — those chains:")
+        out.append("  It is ALSO reached from code (el.click() / dispatchEvent / a prop / an HTTP call) — those chains:")
     lines, truncated = _chain(g, i, False, depth)
     out += lines or ["  (" + _no_callers(g, i) + ")"]
     if truncated:
@@ -580,8 +607,8 @@ def impact(g, fresh_text, target):
     if f["kind"] == "event":
         p = f.get("parent")
         fired = sorted({c[0] for c in g.inc[i]})
-        out.append("- It is an event listener: the browser fires it" +
-                   (f"; the code also fires it from: {', '.join(g.row(x) for x in fired[:10])}" if fired else "; nothing in the code fires it") +
+        out.append(f"- It is an entry point: {_who_fires(g, i)}" +
+                   (f"; the code also reaches it from: {', '.join(g.row(x) for x in fired[:10])}" if fired else "; nothing in the code reaches it") +
                    "." + (f" Registered in {g.row(p)}." if p is not None else ""))
         lines, _ = _chain(g, i, True, 2)
         out.append("- What it runs (2 levels):")
@@ -603,8 +630,16 @@ def impact(g, fresh_text, target):
         out.append(f"- Indirect callers (2–3 levels up): {len(indirect)}{'+' if truncated else ''}")
     ev, n_ev, mod = _entry_points(g, i)
     if n_ev:
-        out.append(f"- Reached from {n_ev} event listener(s) — the user actions that run this code:")
-        out += [f"    {g.row(e)}{_registered(g, e)}" for e in ev]
+        # las acciones del usuario y los endpoints, por separado: «qué pruebo en la pantalla» y
+        # «qué requests pruebo» son dos listas distintas
+        ui = [e for e in ev if not _is_endpoint(g, e)]
+        eps = [e for e in ev if _is_endpoint(g, e)]
+        if ui:
+            out.append(f"- Reached from {len(ui)} user action(s) (event listeners) — what to test in the UI:")
+            out += [f"    {g.row(e)}{_registered(g, e)}" for e in ui]
+        if eps:
+            out.append(f"- Reached from {len(eps)} ENDPOINT(s) — the requests that run this code:")
+            out += [f"    {g.row(e)}" for e in eps]
         if n_ev > len(ev):
             out.append(f"    … {n_ev - len(ev)} more")
     if mod:
@@ -835,7 +870,7 @@ def diff_impact(g, fresh_text, diff_text, untracked=(), limit=40):
         callers = sorted({c[0] for c in g.inc[i] if c[0] != i})
         bits = []
         if f["kind"] == "event":
-            bits.append("an event listener: the browser fires it" + _registered(g, i))
+            bits.append(f"an entry point: {_who_fires(g, i)}" + _registered(g, i))
         else:
             bits.append(f"{len(callers)} direct caller(s)" + (": " + ", ".join(g.row(x) for x in callers[:5]) +
                                                             (f" (+{len(callers) - 5})" if len(callers) > 5 else "") if callers else ""))
@@ -856,7 +891,7 @@ def diff_impact(g, fresh_text, diff_text, untracked=(), limit=40):
                            (f" … (+{len(imp) - 20})" if len(imp) > 20 else ""))
     out.append("")
     if actions:
-        out.append(f"User actions that reach the changed code — what to test: {len(actions)}")
+        out.append(f"User actions and endpoints that reach the changed code — what to test: {len(actions)}")
         for e in sorted(actions, key=lambda e: (g.files[g.fns[e]["file"]], g.fns[e]["line"]))[:max(limit, 40)]:
             via = sorted(actions[e] - {e})
             out.append(f"  {g.row(e)}{_registered(g, e)}" +
