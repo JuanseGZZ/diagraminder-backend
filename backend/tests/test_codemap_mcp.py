@@ -242,6 +242,23 @@ try:
         check("y el grafo va COMPACTO como lo guarda la web (fns como arrays)",
               isinstance(tj["graph"]["fns"][0], list), str(tj["graph"]["fns"][:1]))
 
+        print("\n### C2. «View code»: /codemap/source lee UN archivo de adentro de la carpeta del mapa")
+        st, r = http("/codemap/source", {"path": proj, "file": "store.js", "origin": "web"})
+        check("devuelve el archivo pedido (el mapa no guarda el fuente: se lee en el momento)", st == 200 and "export function save" in r.get("text", ""), f"{st} {str(r)[:120]}")
+        st, r = http("/codemap/source", {"path": proj, "file": "../../x.js", "origin": "web"})
+        check("con ../ no se sale de la carpeta (404)", st == 404, f"{st} {r}")
+        try:
+            os.symlink(os.path.join(afuera, "x.js"), os.path.join(proj, "link.js"))
+            st, r = http("/codemap/source", {"path": proj, "file": "link.js", "origin": "web"})
+            check("…ni con un symlink que apunta afuera (realpath)", st == 404, f"{st} {r}")
+            os.remove(os.path.join(proj, "link.js"))
+        except (OSError, NotImplementedError):
+            print("  (sin symlinks: se saltea)")
+        politica(mode="diagrams")
+        st, r = http("/codemap/source", {"path": proj, "file": "store.js"})
+        check("sin origin (el MCP) en «diagrams»: 403, la misma política que escanear", st == 403, f"{st} {r}")
+        politica(mode="files", root=codigo)
+
         print("\n### D. las consultas, con archivo:línea")
         txt, err = mcp.tool("code_map_overview", {})
         check("overview: se elige solo si hay un mapa, y dice que está al día",

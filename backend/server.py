@@ -69,7 +69,7 @@ DEFAULT_PORT = 8765
 # del orquestador necesitan la URL propia para hablarle al MCP del editor.
 PORT = DEFAULT_PORT
 NAME = "DiagraMinder"
-VERSION = "0.47.0"   # Code map: Vue, Svelte y Angular (templates)
+VERSION = "0.48.0"   # /projects/move y /codemap/source («View code»)
 
 # ===================== rutas / disco =====================
 
@@ -1589,13 +1589,15 @@ class Handler(BaseHTTPRequestHandler):
             self._panel_shutdown()
         elif path == "/projects/manifest":
             self._manifest(self._read_json())
+        elif path == "/projects/move":
+            self._projects_move(self._read_json())
         elif path == "/update/apply":
             import updater
             ok, msg = updater.apply(app_version())
             self._json(200 if ok else 409, {"ok": ok, "message": msg})
         elif path == "/state/write":
             self._state_write(self._read_json())
-        elif path in ("/codemap/scan", "/codemap/stamp", "/codemap/diff"):
+        elif path in ("/codemap/scan", "/codemap/stamp", "/codemap/diff", "/codemap/source"):
             self._codemap(path, self._read_json())
         elif path == "/chat":
             self._chat(self._read_json())
@@ -1892,6 +1894,34 @@ class Handler(BaseHTTPRequestHandler):
             saved.append({"name": f.get("name"), "path": rel, "bytes": len(data)})
         sweep_temp_files()                            # de paso, barrer los vencidos
         self._json(200, {"ok": True, "files": saved, "ttlDays": TEMP_TTL_DAYS})
+
+    def _projects_move(self, body):
+        """Mueve un proyecto a otra carpeta RENOMBRANDO su directorio (la web lo pide al mover
+        un file de carpeta). No se reescribe: adentro viven también su historial de versiones
+        del código (source-versions/) y los adjuntos del chat (tempFiles/), y el camino del
+        mirror —escribir el tree.json en la carpeta nueva y podar la vieja— los perdía. Nunca
+        pisa: si en el destino ya hay un directorio con ese nombre, 409."""
+        src = tree_dir(body.get("fromFolder") or "Local", body.get("fromName") or "")
+        dst = tree_dir(body.get("toFolder") or "Local", body.get("toName") or "")
+        if not body.get("fromName") or not body.get("toName"):
+            self._json(400, {"error": "faltan fromName/toName"})
+            return
+        if not os.path.isdir(src):
+            self._json(200, {"moved": False, "reason": "not on disk"})   # nunca se guardó: el sync lo crea
+            return
+        if os.path.realpath(src) == os.path.realpath(dst):
+            self._json(200, {"moved": False, "reason": "same place"})
+            return
+        if os.path.exists(dst):
+            self._json(409, {"error": "a project with that name already exists in that folder"})
+            return
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        os.rename(src, dst)
+        with STATE_LOCK:     # el watcher: la marca sigue al proyecto (si no, el destino «cambió afuera»)
+            old = STATE.pop(_skey(body.get("fromFolder") or "Local", body.get("fromName")), None)
+            if old:
+                STATE[_skey(body.get("toFolder") or "Local", body.get("toName"))] = old
+        self._json(200, {"moved": True, "path": dst})
 
     def _manifest(self, body):
         """Escribe el índice por carpeta (<carpeta>/index.json) + el índice de
@@ -2209,6 +2239,21 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/codemap/stamp":
             self._json(200, {"path": folder, "stamp": codemap.stamp(folder)})
+            return
+        if path == "/codemap/source":
+            # «View code» del Code map: el mapa no guarda el fuente (doc 40), así que se lee
+            # en el momento — un archivo de ADENTRO de la carpeta del mapa (realpath: ni `..`
+            # ni un symlink sacan), con la misma política que escanear.
+            rel = str(body.get("file") or "")
+            full = os.path.realpath(os.path.join(folder, rel))
+            if not rel or not (full.startswith(folder + os.sep)) or not os.path.isfile(full):
+                self._json(404, {"error": f"no such file in {folder}: {rel}"})
+                return
+            if os.path.getsize(full) > 4 * 1024 * 1024:
+                self._json(413, {"error": "the file is too big to show"})
+                return
+            with open(full, "r", encoding="utf-8", errors="replace") as fh:
+                self._json(200, {"path": rel, "text": fh.read()})
             return
         from cli_base import _find_bin
         if path == "/codemap/diff":
