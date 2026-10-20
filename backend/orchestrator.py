@@ -2351,7 +2351,7 @@ CODE_MAP_NOTE = (
     "code_map_overview (start here), code_find, code_who_calls, code_calls and, BEFORE you "
     "change a function or a file, code_impact (who depends on it, which user actions reach "
     "it); code_quality lists complex/long functions and coupled files to refactor. After editing code, call code_map_scan on that folder so the map stays true, then code_diff_impact (base HEAD) for the user actions your change reaches — what to test. "
-    "They are static analysis of JavaScript only: dynamic calls are not seen.")
+    "They are static analysis of JavaScript/TypeScript (and JSX): dynamic calls are not seen.")
 
 
 def _cli_code_notes(ctx, graph, node, cli, notes):

@@ -428,7 +428,7 @@ try:
         check("una ref que no existe: el error de git, y que se puede pasar el diff", err and "pass the diff" in txt, txt[:200])
         txt, err = mcp.tool("code_diff_impact", {"map": "Code map proj", "diff": "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-a\n+b\n"})
         check("lo que no es JS se lista aparte, sin inventar impacto",
-              not err and "not JavaScript" in txt and "README.md" in txt and "No changed line" in txt, txt[:400])
+              not err and "not JS/TS" in txt and "README.md" in txt and "No changed line" in txt, txt[:400])
         txt, err = mcp.tool("code_diff_impact", {"map": "Code map proj", "diff": "diff --git a/store.js b/store.js\n--- a/store.js\n+++ b/store.js\n@@ -2,0 +3,0 @@\n"})
         bloque = codemap.parse_diff("--- a/x.js\n+++ b/x.js\n@@ -5,2 +4,0 @@\n-a\n-b\n")
         check("un hunk que solo BORRA se ubica en la línea que le sigue en el archivo nuevo", bloque["x.js"]["removed_at"] == {5} and not bloque["x.js"]["changed"], str(bloque))
@@ -443,6 +443,32 @@ try:
             txt = codemap.impact(ga, "fresh", "app/trees/treeStore.js:importTree")
             check("app/: code_impact de importTree llega a #open-diagram (quien registra el <input>) y a #home-open (que lo dispara)",
                   "#open-diagram · click" in txt and "#home-open · click" in txt, txt[:900])
+
+    if PUEDE_ESCANEAR:
+        print("\n### T. TypeScript y JSX (paso 3): el backend lee .ts/.tsx, saltea .d.ts y usa el tsconfig")
+        politica(mode="files", root=codigo)
+        tsp = os.path.join(codigo, "tsproj")
+        for rel, src in {
+            "tsconfig.json": '{\n  // alias del monorepo\n  "compilerOptions": { "paths": { "@lib/*": ["./lib/*"] }, },\n}\n',
+            "lib/store.ts": "import type { Doc } from './types';\nexport function save(d: Doc): void {}\n",
+            "lib/types.ts": "export interface Doc { id?: string }\n",
+            "App.tsx": "import { save } from '@lib/store';\nexport function App() { return <button onClick={() => save({})}>Save</button>; }\n",
+            "global.d.ts": "declare const VERSION: string;\n",
+        }.items():
+            p2 = os.path.join(tsp, rel)
+            os.makedirs(os.path.dirname(p2), exist_ok=True)
+            with open(p2, "w", encoding="utf-8") as f:
+                f.write(src)
+        txt, err = mcp.tool("code_map_scan", {"path": "tsproj"})
+        check("code_map_scan de un proyecto TS: 3 archivos (.ts y .tsx), el .d.ts afuera",
+              not err and "3 files" in txt, txt[:200])
+        txt, err = mcp.tool("code_who_calls", {"map": "Code map tsproj", "symbol": "lib/store.ts:save"})
+        check("un símbolo `ruta.ts:nombre` se resuelve (antes la regex solo aceptaba .js)", not err and "Who calls" in txt, txt[:200])
+        txt, err = mcp.tool("code_who_calls", {"map": "Code map tsproj", "symbol": "save"})
+        check("el onClick de JSX es el listener, y el alias @lib/store resolvió por import",
+              not err and '<button "Save"> · click' in txt and "via import" in txt, txt[:400])
+        txt, err = mcp.tool("code_impact", {"map": "Code map tsproj", "target": "lib/types.ts"})
+        check("`import type` se marca como solo tipos (no existe al correr)", not err and "type-only import" in txt, txt[:500])
 
     print("\n### K. el MCP de los agentes de la APP (`--mcp-code`): solo code_*, en SUS carpetas")
     # independiente de la política del MCP del usuario (ese es otro interruptor)

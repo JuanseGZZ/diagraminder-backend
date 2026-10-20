@@ -58,7 +58,7 @@ TOOLS = [
             "chart: the project's documentation), freestyle (a free canvas: associative "
             "memory), activities (an ordered to-do), object (data model / UML), "
             "orchestrator (a team of AI agents), treeQuestionary, documents, codemap (a "
-            "scanned map of a JavaScript code base — query it with the code_* tools, never "
+            "scanned map of a JavaScript/TypeScript code base — query it with the code_* tools, never "
             "read it whole)."
         ),
         "inputSchema": _schema({}, []),
@@ -244,12 +244,12 @@ CODE_TOOLS = [
     {
         "name": "code_map_scan",
         "description": (
-            "Scans a JavaScript project folder and saves its code map (files, imports, "
+            "Scans a JavaScript or TypeScript (also JSX/TSX) project folder and saves its code map (files, imports, "
             "functions, who calls whom, event listeners), which also shows up in the user's "
             "app. Rescanning the same folder UPDATES its map: call it again after you edit "
             "code, so the map doesn't lie to you or to the next agent. `path` is relative to "
             "the folder the user gave DiagraMinder's MCP (default: that folder) and must be "
-            "inside it. node_modules, dist, vendor, build and minified files are skipped."),
+            "inside it. node_modules, dist, vendor, build, minified files and .d.ts are skipped."),
         "inputSchema": _schema({"path": {"type": "string", "description": "the project folder (default: the MCP folder)"},
                                 "name": {"type": "string", "description": "name for a NEW map (default 'Code map: <folder>')"},
                                 "map_folder": {"type": "string", "description": "app folder for a new map (optional)"}}, []),

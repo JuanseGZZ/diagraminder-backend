@@ -31,12 +31,14 @@ import procs
 SKIP_DIRS = {"node_modules", ".git", "dist", "build", "coverage", "vendor", ".next", ".cache", "out"}
 MAX_FILES = 4000
 MAX_BYTES = int(1.5 * 1024 * 1024)
-_JS = re.compile(r"\.(m?js|cjs)$", re.I)
-_MIN = re.compile(r"\.min\.js$", re.I)
+# JS, TypeScript y JSX (paso 3); un .d.ts son solo tipos. La MISMA regla que isJsPath.
+_JS = re.compile(r"\.(m?js|cjs|jsx|m?ts|cts|tsx)$", re.I)
+_MIN = re.compile(r"(\.min\.js|\.d\.[mc]?ts)$", re.I)
 
 KINDS = ["function", "method", "event", "module", "class"]
 HOW = {"import": "via import", "local": "same scope", "this": "this.", "name": "BY NAME (less certain)",
-       "fires": "FIRES it from code (el.click() / dispatchEvent)"}
+       "fires": "FIRES it from code (el.click() / dispatchEvent)",
+       "type": "via the DECLARED TYPE (x: Class / new Class())"}
 
 
 class CodeMapError(Exception):
@@ -95,8 +97,8 @@ def scan(root, node_bin, runner):
     root = os.path.realpath(root)
     files, skipped = walk(root)
     if not files:
-        raise CodeMapError(f"no JavaScript files in {root} (node_modules, dist, vendor, build "
-                           "and minified files are skipped). Only JavaScript for now.")
+        raise CodeMapError(f"no JavaScript or TypeScript files in {root} (node_modules, dist, vendor, "
+                           "build, minified files and .d.ts are skipped).")
     base = os.path.basename(root) or "project"
     sources = {}
     for rel, (full, _, _) in files.items():
@@ -105,7 +107,16 @@ def scan(root, node_bin, runner):
     scan_info = {"root": base, "at": int(time.time() * 1000), "files": len(files),
                  "skipped": skipped, "path": root, "by": "backend",
                  "stamp": {rel: [m, s] for rel, (_, m, s) in files.items()}}
-    p = procs.run([node_bin, runner], input=json.dumps({"root": base, "sources": sources, "scan": scan_info}),
+    payload = {"root": base, "sources": sources, "scan": scan_info}
+    # los alias de un monorepo TS (`compilerOptions.paths`): el texto va crudo, lo entiende el
+    # MISMO código que en la web (aliasesFromTsconfig)
+    for cfg_name in ("tsconfig.json", "jsconfig.json"):
+        cfg_path = os.path.join(root, cfg_name)
+        if os.path.isfile(cfg_path) and os.path.getsize(cfg_path) < 512 * 1024:
+            with open(cfg_path, "r", encoding="utf-8", errors="replace") as fh:
+                payload["tsconfig"] = fh.read()
+            break
+    p = procs.run([node_bin, runner], input=json.dumps(payload),
                   capture_output=True, text=True, encoding="utf-8", timeout=300)
     if p.returncode != 0 or not (p.stdout or "").startswith("{"):
         raise CodeMapError("the analyzer failed: " + ((p.stderr or "").strip().splitlines() or ["no output"])[-1][:300])
@@ -129,7 +140,7 @@ def freshness(tree, current):
     gone = sorted(r for r in old if r not in current)
     new = sorted(r for r in current if r not in old)
     if not (changed or gone or new):
-        return "fresh", f"Scanned on {when}; no JavaScript file changed since — the map is current."
+        return "fresh", f"Scanned on {when}; no source file changed since — the map is current."
     parts = []
     for label, lst in (("changed", changed), ("new", new), ("deleted", gone)):
         if lst:
@@ -239,7 +250,7 @@ class Graph:
                 return i
             raise CodeMapError(f"there is no {s} in this map.")
         cands = None
-        m = re.fullmatch(r"(.+?\.(?:m?js|cjs))(?::|#)(.+)", s, re.I)
+        m = re.fullmatch(r"(.+?\.(?:m?js|cjs|jsx|m?ts|cts|tsx))(?::|#)(.+)", s, re.I)
         if m:
             fidx = self.match_files(m.group(1))
             if not fidx:
@@ -511,7 +522,7 @@ def impact(g, fresh_text, target):
     if not t:
         raise CodeMapError("`target` is required: a file path or a symbol.")
     out = [_header(g, fresh_text), ""]
-    is_file_like = bool(re.search(r"\.(m?js|cjs)$", t, re.I))
+    is_file_like = bool(_JS.search(t))
     fidx = g.match_files(t) if is_file_like else []
     if is_file_like and len(fidx) > 1:
         raise CodeMapError(f"'{t}' matches several files: " + ", ".join(g.files[x] for x in fidx[:10]) + ". Be more specific.")
@@ -522,9 +533,14 @@ def impact(g, fresh_text, target):
             out.append(f"  ⚠ it did not parse ({(g.file_err[fi] or {}).get('message')}): its code is not in the map.")
         importers = sorted({e[0] for e in g.imports if e[1] == fi})
         # cuál es dinámico: sin la marca, el agente grepeaba `import(` para comprobarlo
-        dyn = {e[0] for e in g.imports if e[1] == fi and len(e) > 3 and e[3]}
-        stat = {e[0] for e in g.imports if e[1] == fi and not (len(e) > 3 and e[3])}
-        names = [g.files[x] + (" (dynamic import() only)" if x in dyn and x not in stat else "") for x in importers]
+        # e[3]: 0 estático · 1 solo import() dinámico · 2 solo tipos (`import type`, TS)
+        kind = {}
+        for e in g.imports:
+            if e[1] == fi:
+                k = e[3] if len(e) > 3 and e[3] in (1, 2) else 0
+                kind[e[0]] = min(kind.get(e[0], k), k)
+        tag = {1: " (dynamic import() only)", 2: " (type-only import: gone at runtime)"}
+        names = [g.files[x] + tag.get(kind.get(x, 0), "") for x in importers]
         out.append(f"- Imported by {len(importers)} file(s) — the complete list, static and dynamic: " +
                    (", ".join(names[:60]) or "none") + (f" … (+{len(names) - 60})" if len(names) > 60 else ""))
         # quién usa qué, de afuera
@@ -800,7 +816,7 @@ def diff_impact(g, fresh_text, diff_text, untracked=(), limit=40):
                 touched.setdefault(i, {"lines": set(), "whole": False})["lines"].add(ln)
 
     if not touched and not module_files:
-        out.append("No changed line falls in JavaScript code of this map.")
+        out.append("No changed line falls in JavaScript/TypeScript code of this map.")
     actions = {}            # evento → funciones cambiadas que lo alcanzan
     rows = sorted(touched, key=lambda i: (g.files[g.fns[i]["file"]], g.fns[i]["line"]))
     if rows:
@@ -851,8 +867,8 @@ def diff_impact(g, fresh_text, diff_text, untracked=(), limit=40):
         out.append("No event listener reaches the changed code statically (it may run at load, be "
                    "exported for outside callers, or be reached dynamically).")
     for label, lst in (("Deleted files (their callers are not in this map any more)", deleted),
-                       ("JavaScript files NOT in the map (new since the scan? call code_map_scan)", not_in_map),
-                       ("Other changed files (not JavaScript: not analyzed)", not_js)):
+                       ("JS/TS files NOT in the map (new since the scan? call code_map_scan)", not_in_map),
+                       ("Other changed files (not JS/TS: not analyzed)", not_js)):
         if lst:
             out.append(f"{label}: " + ", ".join(lst[:30]) + (f" … (+{len(lst) - 30})" if len(lst) > 30 else ""))
     out.append("Static analysis: `el.click()` and dispatched events are followed only on #id, document or "

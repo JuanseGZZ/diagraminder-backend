@@ -43,7 +43,7 @@ SYSTEM_PREAMBLE = (
     "edit the `tree.json` putting a new `runReq` in the node's `data`, save and end "
     "your turn; the app runs it and hands you the result on the next turn. See the "
     "diagramind-object skill.\n\n"
-    "CODE MAPS (type codemap): a codemap project is a GENERATED map of a JavaScript code "
+    "CODE MAPS (type codemap): a codemap project is a GENERATED map of a JavaScript/TypeScript code "
     "base (files, imports, functions, who calls whom, event listeners). NEVER read or edit "
     "its tree.json by hand — it is a large compact graph, and a hand edit breaks it. If you "
     "have the `mcp__dmcode__*` tools, query it with them: code_map_overview, code_find, "
