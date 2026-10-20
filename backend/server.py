@@ -69,7 +69,7 @@ DEFAULT_PORT = 8765
 # del orquestador necesitan la URL propia para hablarle al MCP del editor.
 PORT = DEFAULT_PORT
 NAME = "DiagraMinder"
-VERSION = "0.45.0"   # Code map: endpoints, enlace HTTP, props de React, lo que queda afuera por lenguaje
+VERSION = "0.46.0"   # Code map: Python y Java (tree-sitter), prefijos de routers
 
 # ===================== rutas / disco =====================
 
@@ -751,7 +751,35 @@ def _codemap_runner_bajado():
         os.replace(tmp, dest)
     except Exception:
         pass                      # sin red: el que estaba (aunque sea viejo) o nada
+    _codemap_wasm_bajados(os.path.dirname(dest), url)
     return dest if os.path.exists(dest) else None
+
+
+CODEMAP_WASM = ("tree-sitter.wasm", "tree-sitter-python.wasm", "tree-sitter-java.wasm")
+
+
+def _codemap_wasm_bajados(carpeta, runner_url):
+    """Python y Java van por tree-sitter (wasm). El analizador los busca en
+    `vendor/tree-sitter/` junto a él: el backend solo se los baja del MISMO sitio, al lado
+    del analizador. Solo los que faltan (van versionados con la web), y solo si son wasm de
+    verdad (`\\0asm`): un 200 de un portal cautivo no se guarda."""
+    base = runner_url.rsplit("/dist/", 1)[0] + "/vendor/tree-sitter/"
+    dest = os.path.join(carpeta, "vendor", "tree-sitter")
+    for nombre in CODEMAP_WASM:
+        f = os.path.join(dest, nombre)
+        if os.path.exists(f):
+            continue
+        try:
+            with urllib.request.urlopen(base + nombre, timeout=30) as r:
+                data = r.read()
+            if not data.startswith(b"\0asm"):
+                continue
+            os.makedirs(dest, exist_ok=True)
+            with open(f + ".tmp", "wb") as fh:
+                fh.write(data)
+            os.replace(f + ".tmp", f)
+        except Exception:
+            pass                  # sin red: JS/TS anda igual; Python/Java dirán que falta
 
 
 # Solo estas raíces se sirven. Una lista blanca y no "todo lo que cuelgue del dir"

@@ -28,15 +28,17 @@ import procs
 
 # Las mismas reglas que la web (codemapMode.js): SKIP_DIRS, MAX_FILES, MAX_BYTES e
 # isJsPath. Si cambian allá, cambian acá — si no, la web y el agente ven mapas distintos.
-SKIP_DIRS = {"node_modules", ".git", "dist", "build", "coverage", "vendor", ".next", ".cache", "out"}
+SKIP_DIRS = {"node_modules", ".git", "dist", "build", "coverage", "vendor", ".next", ".cache", "out",
+             "venv", "__pycache__", "site-packages", "target"}   # Python y Java: lo generado, no fuente
 MAX_FILES = 4000
 MAX_BYTES = int(1.5 * 1024 * 1024)
-# JS, TypeScript y JSX (paso 3); un .d.ts son solo tipos. La MISMA regla que isJsPath.
-_JS = re.compile(r"\.(m?js|cjs|jsx|m?ts|cts|tsx)$", re.I)
+# JS, TypeScript y JSX (paso 3), Python y Java (tree-sitter); un .d.ts son solo tipos. La
+# MISMA regla que isJsPath + langOf de la web.
+_JS = re.compile(r"\.(m?js|cjs|jsx|m?ts|cts|tsx|py|java)$", re.I)
 _MIN = re.compile(r"(\.min\.js|\.d\.[mc]?ts)$", re.I)
 # Código que el mapa TODAVÍA no analiza: se cuenta y se dice («2 .py not in the map»). La
 # MISMA lista que unsupportedExt de analyzer.js.
-_UNSUP = re.compile(r"\.(py|java|go|rb|php|cs|kt|kts|rs|swift|scala|vue|svelte|c|cc|cpp|h|hpp)$", re.I)
+_UNSUP = re.compile(r"\.(go|rb|php|cs|kt|kts|rs|swift|scala|vue|svelte|c|cc|cpp|h|hpp)$", re.I)
 _UNSUP_DIRS = {"venv", ".venv", "__pycache__"}
 
 KINDS = ["function", "method", "event", "module", "class"]
@@ -119,8 +121,8 @@ def scan(root, node_bin, runner):
     unsupported = {}   # «2 .py not in the map»: lo que el lenguaje todavía no permite analizar
     files, skipped = walk(root, unsupported)
     if not files:
-        raise CodeMapError(f"no JavaScript or TypeScript files in {root} (node_modules, dist, vendor, "
-                           "build, minified files and .d.ts are skipped).")
+        raise CodeMapError(f"no JavaScript, TypeScript, Python or Java files in {root} (node_modules, dist, "
+                           "vendor, build, venv, target, minified files and .d.ts are skipped).")
     base = os.path.basename(root) or "project"
     sources = {}
     for rel, (full, _, _) in files.items():
@@ -273,7 +275,8 @@ class Graph:
                 return i
             raise CodeMapError(f"there is no {s} in this map.")
         cands = None
-        m = re.fullmatch(r"(.+?\.(?:m?js|cjs|jsx|m?ts|cts|tsx))(?::|#)(.+)", s, re.I)
+        # las extensiones salen de _JS: una lista aparte ya se quedó atrás dos veces (TS, Python)
+        m = re.fullmatch(r"(.+?\.(?:" + _JS.pattern[3:-2] + r"))(?::|#)(.+)", s, re.I)
         if m:
             fidx = self.match_files(m.group(1))
             if not fidx:
@@ -851,7 +854,7 @@ def diff_impact(g, fresh_text, diff_text, untracked=(), limit=40):
                 touched.setdefault(i, {"lines": set(), "whole": False})["lines"].add(ln)
 
     if not touched and not module_files:
-        out.append("No changed line falls in JavaScript/TypeScript code of this map.")
+        out.append("No changed line falls in code of this map.")
     actions = {}            # evento → funciones cambiadas que lo alcanzan
     rows = sorted(touched, key=lambda i: (g.files[g.fns[i]["file"]], g.fns[i]["line"]))
     if rows:
