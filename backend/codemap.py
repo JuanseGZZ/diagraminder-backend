@@ -335,8 +335,10 @@ def overview(g, fresh_text, max_files=60):
     top = sorted(imported, key=lambda k: -len(imported[k]))[:10]
     lines.append("Most imported files: " + "; ".join(f"{g.files[k]} ({len(imported[k])})" for k in top))
     if g.cycles:
-        lines.append(f"Import cycles: {len(g.cycles)} — " + " | ".join(
-            f"{len(c)} files incl. {', '.join(g.files[x] for x in c[:4])}{'…' if len(c) > 4 else ''}" for c in g.cycles[:3]))
+        # la lista ENTERA: «14 files incl. a, b, c, d…» hacía que el agente reconstruyera el
+        # ciclo con 41 greps (bench, 2026-10-20)
+        lines.append(f"Import cycles (static imports; each is a strongly connected component): {len(g.cycles)}")
+        lines += [f"  {len(c)} files: {_cycle_files(g, c)}" for c in g.cycles[:5]]
     lines += ["", "Next: code_find to locate something, code_impact before editing it, "
                   "code_who_calls / code_calls to follow a chain."]
     return "\n".join(lines)
@@ -395,13 +397,46 @@ def find(g, fresh_text, query="", kind="", file="", limit=40):
     return "\n".join(out)
 
 
+def _call_lines(c):
+    """Las líneas de una llamada: TODAS si se repite (c[5], desde 2026-10-20), si no la única.
+    «call at 1801 ×2» sin la otra línea mandaba al agente a grepear (bench/codemap_agent.py)."""
+    return c[5] if len(c) > 5 and isinstance(c[5], list) and c[5] else [c[3]]
+
+
+def _cycle_files(g, c, cap=40):
+    return ", ".join(g.files[x] for x in c[:cap]) + (f" … (+{len(c) - cap})" if len(c) > cap else "")
+
+
+def _no_callers(g, i):
+    """Qué se puede afirmar de algo sin callers. Una función común (no método) que NO se
+    exporta: el analizador cuenta como uso llamarla Y nombrarla como valor (`{k: fn}`,
+    `[fn]`, `return fn`, `x.cb = fn`, pasarla de argumento), así que no hay camino estático
+    a ella. Decirlo con esas letras importa: el «NOT necessarily dead» a secas hacía que el
+    agente lo verificara todo con grep y pagara la consulta dos veces (bench, 2026-10-20)."""
+    f = g.fns[i]
+    # `tree.render = function…` también es kind «function», pero se llama por despacho
+    # (`x.render()`): con punto en el nombre vale lo de un método. Medido en app/: sin esta
+    # distinción, 13 funciones vivas salían «unused»; con ella quedan las 4 muertas de verdad.
+    if f["kind"] == "function" and "." not in f["name"] and i not in g.exported:
+        return ("no callers and no references: it is not exported, and nothing in the project calls it "
+                "or uses it as a value (passing it as an argument, `{k: fn}`, `[fn]`, `return fn` and "
+                "`x.cb = fn` all count). Only string-based access could still reach it — `window[name]`, "
+                "eval, an `onclick=\"…\"` attribute in HTML. Unless the code does that, it is unused.")
+    if f["kind"] == "method" or "." in f["name"]:
+        return ("no callers resolved — but this is a METHOD (or a function stored in a property): calls like `obj." + f["name"].split(".")[-1] +
+                "()` are matched only when the method name is unique in the project, so dynamic dispatch "
+                "(polymorphism) is not seen. Grep the method name before concluding it is unused.")
+    return ("no callers in the project — it is EXPORTED, so code outside this map (another package, "
+            "tests, HTML) may call it.")
+
+
 def _chain(g, start, forward, depth):
     order, truncated = g.walk_dir(start, forward, depth)
     lines = []
     for d, u, v, c in order:
         how = HOW.get(c[2], c[2])
         n = f" ×{c[4]}" if len(c) > 4 and c[4] and c[4] > 1 else ""
-        call_at = f"{g.files[g.fns[c[0]]['file']]}:{c[3]}"
+        call_at = f"{g.files[g.fns[c[0]]['file']]}:{', '.join(str(x) for x in _call_lines(c))}"
         lines.append(f"{'  ' * d}{'→' if forward else '←'} {g.row(v)}   (call at {call_at}, {how}{n})")
     return lines, truncated
 
@@ -417,8 +452,7 @@ def who_calls(g, fresh_text, symbol, depth=2):
                    (f". It is registered in {g.row(p)}." if p is not None else "."))
         return "\n".join(out)
     lines, truncated = _chain(g, i, False, depth)
-    out += lines or ["  (no callers visible in the code — it may be called dynamically, from outside "
-                     "the project, or passed as a callback; it is NOT necessarily dead)"]
+    out += lines or ["  (" + _no_callers(g, i) + ")"]
     if truncated:
         out.append("  … truncated: lower `depth`.")
     if any(c[2] == "name" for _, _, _, c in g.walk_dir(i, False, depth)[0]):
@@ -479,7 +513,12 @@ def impact(g, fresh_text, target):
         if fi in g.file_err:
             out.append(f"  ⚠ it did not parse ({(g.file_err[fi] or {}).get('message')}): its code is not in the map.")
         importers = sorted({e[0] for e in g.imports if e[1] == fi})
-        out.append(f"- Imported by {len(importers)} file(s): " + (", ".join(g.files[x] for x in importers[:25]) or "none"))
+        # cuál es dinámico: sin la marca, el agente grepeaba `import(` para comprobarlo
+        dyn = {e[0] for e in g.imports if e[1] == fi and len(e) > 3 and e[3]}
+        stat = {e[0] for e in g.imports if e[1] == fi and not (len(e) > 3 and e[3])}
+        names = [g.files[x] + (" (dynamic import() only)" if x in dyn and x not in stat else "") for x in importers]
+        out.append(f"- Imported by {len(importers)} file(s) — the complete list, static and dynamic: " +
+                   (", ".join(names[:60]) or "none") + (f" … (+{len(names) - 60})" if len(names) > 60 else ""))
         # quién usa qué, de afuera
         mine = [i for i, f in enumerate(g.fns) if f["file"] == fi]
         used_out = []
@@ -503,7 +542,8 @@ def impact(g, fresh_text, target):
                        "; ".join(g.row(e) for e in sorted(reach)[:15]) + (" …" if len(reach) > 15 else ""))
         cyc = [c for c in g.cycles if fi in c]
         if cyc:
-            out.append(f"- ⚠ It is in an import CYCLE of {len(cyc[0])} files: adding an import here can make it worse "
+            out.append(f"- ⚠ It is in an import CYCLE of {len(cyc[0])} files (static imports; the strongly connected "
+                       f"component): {_cycle_files(g, cyc[0])}. Adding an import here can make it worse "
                        "(in a bundle, a cycle used during load fails with 'Cannot access X before initialization').")
         return "\n".join(out)
 
@@ -527,7 +567,8 @@ def impact(g, fresh_text, target):
     out.append(f"- Direct callers: {len(direct)}" + (f" (from {len(other_files)} other file(s): {', '.join(other_files[:10])})" if other_files else ""))
     for x in direct[:25]:
         cs = [c for c in g.inc[i] if c[0] == x]
-        out.append(f"    {g.row(x)}  (call at line {', '.join(str(c[3]) for c in cs[:4])}{', BY NAME' if any(c[2] == 'name' for c in cs) else ''})")
+        ls = sorted({ln for c in cs for ln in _call_lines(c)})
+        out.append(f"    {g.row(x)}  (call at line {', '.join(str(ln) for ln in ls)}{', BY NAME' if any(c[2] == 'name' for c in cs) else ''})")
     if len(direct) > 25:
         out.append(f"    … {len(direct) - 25} more")
     order, truncated = g.walk_dir(i, False, 3, limit=500)
@@ -548,12 +589,13 @@ def impact(g, fresh_text, target):
     if regs:
         out.append(f"- It registers {len(regs)} event listener(s): " + "; ".join(g.row(e) for e in regs[:8]))
     if not direct and not n_ev:
-        out.append("- No visible callers. It may be dead, or called dynamically / from outside — "
-                   "grep for its name before concluding.")
+        out.append("- " + _no_callers(g, i)[0].upper() + _no_callers(g, i)[1:])
     if by_name:
         out.append(f"- {len(by_name)} caller edge(s) were matched BY NAME only: verify them.")
-    out.append("Static analysis can't see dynamic calls (obj[k]()), callbacks handed to libraries, "
-               "or calls from HTML. After you edit, call code_map_scan so the map stays true.")
+    out.append("These lists are complete for every call the analysis resolves (by import, scope or this; "
+               "BY NAME is flagged). Not seen: computed calls (obj[k]()), code reached through "
+               "`el.click()` or a dispatched CustomEvent, and HTML attributes. After you edit, call "
+               "code_map_scan so the map stays true.")
     return "\n".join(out)
 
 

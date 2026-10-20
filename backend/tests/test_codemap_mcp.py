@@ -245,7 +245,9 @@ try:
         txt, err = mcp.tool("code_map_overview", {})
         check("overview: se elige solo si hay un mapa, y dice que está al día",
               not err and "map is current" in txt, txt[:200])
-        check("…y cuenta el ciclo de imports (store ⇄ view)", "Import cycles: 1" in txt, txt[-500:])
+        check("…y cuenta el ciclo de imports (store ⇄ view)", "Import cycles" in txt and ": 1" in txt, txt[-500:])
+        check("…con TODOS sus archivos (cortar la lista mandaba al agente a reconstruirlo con grep)",
+              "2 files: proj/store.js, proj/view.js" in txt, txt[-500:])
         txt, err = mcp.tool("code_find", {"query": "save"})
         check("code_find da path:line y callers", not err and "proj/store.js:3  save" in txt and "←" in txt, txt[:300])
         txt, err = mcp.tool("code_find", {"kind": "event"})
@@ -267,10 +269,11 @@ try:
         txt, err = mcp.tool("code_impact", {"target": "save"})
         check("code_impact de una función: callers, el evento que la alcanza y que es exportada",
               not err and "Direct callers: 1" in txt and "event listener" in txt and "EXPORTED" in txt, txt[:600])
-        check("…y no promete de más: dice qué no ve el análisis estático", "dynamic" in txt, txt[-300:])
+        check("…y no promete de más: dice qué no ve el análisis estático", "Not seen" in txt and "obj[k]()" in txt, txt[-300:])
         txt, err = mcp.tool("code_impact", {"target": "store.js"})
         check("code_impact de un archivo: quién lo importa, qué se usa de afuera y el ciclo",
               not err and "Imported by 2" in txt and "CYCLE" in txt and "save" in txt, txt[:600])
+        check("…y el ciclo con sus archivos, no solo cuántos son", "proj/view.js. Adding" in txt, txt[-400:])
         txt, err = mcp.tool("code_quality", {})
         check("code_quality: el ciclo como hallazgo ALTO, con los archivos que lo forman",
               not err and "[HIGH] Import cycles" in txt and "proj/store.js" in txt and "proj/view.js" in txt, txt[:600])
