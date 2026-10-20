@@ -315,6 +315,21 @@ CODE_TOOLS = [
         "inputSchema": _schema({**_MAPA, "file": {"type": "string", "description": "only findings in this file"},
                                 "limit": {"type": "integer", "description": "default 30"}}, []),
     },
+    {
+        "name": "code_diff_impact",
+        "description": (
+            "What a CHANGE touches: give it a diff and it maps every changed line to the "
+            "function or event listener that contains it, with each one's direct callers, and "
+            "lists the user actions (event listeners) that reach any changed code — the list of "
+            "what to test, and of what a reviewer should look at. Pass `diff` (a unified diff, "
+            "e.g. the output of `git diff`), or `base` (a git ref: the backend runs `git diff "
+            "<base>` in the map's folder, uncommitted changes and new untracked files included; "
+            "that reads code from disk, so it needs the MCP at level 'files'). Line numbers are "
+            "the NEW side: scan after editing (code_map_scan) so the map matches the code." + _COMO_CODIGO),
+        "inputSchema": _schema({**_MAPA, "diff": {"type": "string", "description": "a unified diff (git diff output)"},
+                                "base": {"type": "string", "description": "a git ref to diff the map's folder against (default HEAD) — used when `diff` is not given"},
+                                "limit": {"type": "integer", "description": "max changed functions listed (default 40)"}}, []),
+    },
 ]
 TOOLS = TOOLS + CODE_TOOLS
 _NOMBRES_CODIGO = {t["name"] for t in CODE_TOOLS}
@@ -555,6 +570,21 @@ def _codigo(name, args):
             return _cm.impact(g, fresco, args.get("target") or args.get("symbol")), False
         if name == "code_quality":
             return _cm.quality(g, fresco, args.get("file") or "", int(args.get("limit") or 30)), False
+        if name == "code_diff_impact":
+            diff, untracked = args.get("diff") or "", []
+            if not diff.strip():
+                path = (obj.get("scan") or {}).get("path")
+                if not path:
+                    return ("this map was scanned in the browser, so DiagraMinder doesn't know its folder: "
+                            "pass the diff as `diff` (e.g. the output of `git diff`)."), True
+                # el SERVIDOR corre git y decide si se puede (lee código: nivel «files»)
+                res, err = _api("/codemap/diff", {"path": path, "base": args.get("base") or "HEAD", **_origen([path])})
+                if err:
+                    return err + " — or pass the diff yourself as `diff`.", True
+                diff, untracked = res.get("diff") or "", res.get("untracked") or []
+                if not diff.strip() and not untracked:
+                    return f"No changes in {path} against {args.get('base') or 'HEAD'}.", False
+            return _cm.diff_impact(g, fresco, diff, untracked, int(args.get("limit") or 40)), False
     except _cm.CodeMapError as e:
         return str(e), True
     return f"unknown tool: {name}", True

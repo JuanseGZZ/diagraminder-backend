@@ -69,7 +69,7 @@ DEFAULT_PORT = 8765
 # del orquestador necesitan la URL propia para hablarle al MCP del editor.
 PORT = DEFAULT_PORT
 NAME = "DiagraMinder"
-VERSION = "0.42.0"   # el backend solo se baja el analizador; un mapa del navegador se adopta al re-escanear
+VERSION = "0.43.0"   # code_diff_impact (/codemap/diff); el mapa sigue disparos y helpers de listener
 
 # ===================== rutas / disco =====================
 
@@ -1567,7 +1567,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200 if ok else 409, {"ok": ok, "message": msg})
         elif path == "/state/write":
             self._state_write(self._read_json())
-        elif path in ("/codemap/scan", "/codemap/stamp"):
+        elif path in ("/codemap/scan", "/codemap/stamp", "/codemap/diff"):
             self._codemap(path, self._read_json())
         elif path == "/chat":
             self._chat(self._read_json())
@@ -2135,9 +2135,9 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
     def _codemap(self, path, body):
-        """POST /codemap/scan | /codemap/stamp (doc 40 §Etapa 5): escanea una carpeta con
-        el analizador de la web (node) o devuelve la marca actual de sus .js, para saber
-        si un mapa quedó viejo.
+        """POST /codemap/scan | /codemap/stamp | /codemap/diff (doc 40 §Etapa 5 y 9):
+        escanea una carpeta con el analizador de la web (node), devuelve la marca actual
+        de sus .js (para saber si un mapa quedó viejo) o su `git diff` contra una ref.
 
         Lee código del disco, así que para el MCP vale lo mismo que /fs: el nivel tiene
         que habilitar archivos y la carpeta tiene que caer DENTRO de la raíz elegida. Se
@@ -2183,6 +2183,19 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"path": folder, "stamp": codemap.stamp(folder)})
             return
         from cli_base import _find_bin
+        if path == "/codemap/diff":
+            # `git diff` LEE el código de la carpeta: la misma política que escanear,
+            # chequeada arriba, no una aparte (code_diff_impact con `base`).
+            try:
+                diff, untracked = codemap.git_diff(folder, body.get("base"), _find_bin(["git"]))
+            except codemap.CodeMapError as e:
+                self._json(422, {"error": str(e)})
+                return
+            except subprocess.TimeoutExpired:
+                self._json(504, {"error": "git diff took more than a minute"})
+                return
+            self._json(200, {"path": folder, "diff": diff, "untracked": untracked})
+            return
         try:
             text = codemap.scan(folder, _find_bin(["node"]), codemap_runner())
         except codemap.CodeMapError as e:

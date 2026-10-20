@@ -94,6 +94,7 @@ class Mcp:
 RUNNER = os.environ.get("DMN_CODEMAP_RUNNER") or os.path.realpath(
     os.path.join(BACKEND, "..", "..", "app", "codemap", "nodeRunner.mjs"))
 NODE = _find_bin(["node"])
+GIT = _find_bin(["git"])
 PUEDE_ESCANEAR = bool(NODE) and os.path.exists(RUNNER)
 
 # Un proyecto chico con lo que importa: imports, un evento, una cadena, un ciclo, un
@@ -184,8 +185,8 @@ try:
 
     print("\n### A. los niveles: consultar es de «diagrams», escanear es de «files»")
     tools = mcp.lista()
-    consultas = ["code_calls", "code_find", "code_impact", "code_map_overview", "code_quality", "code_who_calls"]
-    check("en «diagrams» están las 6 que CONSULTAN un mapa", all(t in tools for t in consultas), str(tools))
+    consultas = ["code_calls", "code_diff_impact", "code_find", "code_impact", "code_map_overview", "code_quality", "code_who_calls"]
+    check("en «diagrams» están las 7 que CONSULTAN un mapa", all(t in tools for t in consultas), str(tools))
     check("pero NO code_map_scan (lee código del disco)", "code_map_scan" not in tools, str(tools))
     txt, err = mcp.tool("code_map_scan", {})
     check("llamarla igual se rechaza explicando cómo destrabarlo", err and "Settings" in txt, txt[:160])
@@ -383,6 +384,66 @@ try:
     except codemap.CodeMapError as e:
         check("sin analizador (el backend solo, sin la web): lo dice", "no code analyzer" in str(e), str(e))
 
+    if PUEDE_ESCANEAR and GIT:
+        print("\n### J. code_diff_impact: qué toca un cambio y qué acciones del usuario hay que probar")
+        politica(mode="files", root=codigo)
+        def git(*a):
+            return subprocess.run([GIT, *a], cwd=proj, capture_output=True, text=True)
+        git("init", "-q")
+        git("-c", "user.email=t@t", "-c", "user.name=t", "add", "-A")
+        git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "base")
+        src = open(os.path.join(proj, "store.js"), encoding="utf-8").read()
+        with open(os.path.join(proj, "store.js"), "w", encoding="utf-8") as f:
+            f.write(src.replace("JSON.stringify(data)", "JSON.stringify(data ?? {})"))
+        with open(os.path.join(proj, "nuevo.js"), "w", encoding="utf-8") as f:
+            f.write('import { load } from "./store.js";\nexport function nuevo() { return load(); }\n')
+        txt, err = mcp.tool("code_diff_impact", {"map": "Code map proj"})
+        check("con el mapa VIEJO avisa que las líneas pueden no coincidir (escanear primero)",
+              "older than the code" in txt, txt[:400])
+        mcp.tool("code_map_scan", {"path": "proj"})
+        txt, err = mcp.tool("code_diff_impact", {"map": "Code map proj"})
+        check("base HEAD: la línea cambiada cae en su función (save, línea 4)",
+              not err and "proj/store.js:3  save  [lines 4]" in txt, txt[:500])
+        check("…con quién la llama (el evento, y extra() de la sección E)", "2 direct caller(s): proj/main.js:4  #save · click [event], proj/store.js:7  extra" in txt, txt[txt.find("Changed"):][:700].replace("\n", " | "))
+        check("…y la ACCIÓN del usuario que llega ahí — qué probar", "what to test: 1" in txt and "#save · click" in txt.split("what to test")[1], txt[-600:])
+        check("un archivo nuevo SIN seguir por git también cuenta (lo que el agente acaba de crear)",
+              "proj/nuevo.js:2  nuevo  [new]" in txt, txt[:600])
+        check("…y no promete de más: lo que el estático no sigue", "not followed" in txt, txt[-300:])
+        diff = git("diff", "--relative", "HEAD").stdout
+        politica(mode="diagrams")
+        txt, err = mcp.tool("code_diff_impact", {"map": "Code map proj", "diff": diff})
+        check("con `diff` como texto anda en «diagrams» (no lee el disco)",
+              not err and "proj/store.js:3  save  [lines 4]" in txt, txt[:400])
+        txt, err = mcp.tool("code_diff_impact", {"map": "Code map proj"})
+        check("…pero correr git en «diagrams» se rechaza, y dice cómo seguir",
+              err and "files" in txt and "pass the diff" in txt, txt[:300])
+        st, r = http("/codemap/diff", {"path": proj})
+        check("…y el SERVIDOR también lo rechaza por la red", st == 403, f"{st} {r}")
+        politica(mode="files", root=codigo)
+        trampa = os.path.join(home, "pisado.txt")
+        txt, err = mcp.tool("code_diff_impact", {"map": "Code map proj", "base": f"--output={trampa}"})
+        check("una «ref» que es una opción de git se rechaza y no escribe nada",
+              err and "not a git ref" in txt and not os.path.exists(trampa), txt[:200])
+        txt, err = mcp.tool("code_diff_impact", {"map": "Code map proj", "base": "no-existe"})
+        check("una ref que no existe: el error de git, y que se puede pasar el diff", err and "pass the diff" in txt, txt[:200])
+        txt, err = mcp.tool("code_diff_impact", {"map": "Code map proj", "diff": "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-a\n+b\n"})
+        check("lo que no es JS se lista aparte, sin inventar impacto",
+              not err and "not JavaScript" in txt and "README.md" in txt and "No changed line" in txt, txt[:400])
+        txt, err = mcp.tool("code_diff_impact", {"map": "Code map proj", "diff": "diff --git a/store.js b/store.js\n--- a/store.js\n+++ b/store.js\n@@ -2,0 +3,0 @@\n"})
+        bloque = codemap.parse_diff("--- a/x.js\n+++ b/x.js\n@@ -5,2 +4,0 @@\n-a\n-b\n")
+        check("un hunk que solo BORRA se ubica en la línea que le sigue en el archivo nuevo", bloque["x.js"]["removed_at"] == {5} and not bloque["x.js"]["changed"], str(bloque))
+        bloque = codemap.parse_diff("--- a/x.js\n+++ b/x.js\n@@ -1,3 +1,4 @@\n ctx\n-old\n+new1\n+new2\n ctx\n")
+        check("con contexto: cuenta las líneas del lado nuevo", bloque["x.js"]["changed"] == {2, 3}, str(bloque))
+        # contra app/ REAL, la cadena que el agente no encontraba (bench t6): importTree ←
+        # importAsNewTree ← <input> · change, REGISTRADO en openDmerPicker ← #open-diagram ·
+        # click, que el Home DISPARA con .click() desde #home-open
+        app_dir = os.path.realpath(os.path.join(BACKEND, "..", "..", "app"))
+        if os.path.isdir(app_dir):
+            ga = codemap.Graph(json.loads(codemap.scan(app_dir, NODE, RUNNER)))
+            txt = codemap.impact(ga, "fresh", "app/trees/treeStore.js:importTree")
+            check("app/: code_impact de importTree llega a #open-diagram (quien registra el <input>) y a #home-open (que lo dispara)",
+                  "#open-diagram · click" in txt and "#home-open · click" in txt, txt[:900])
+
     print("\n### K. el MCP de los agentes de la APP (`--mcp-code`): solo code_*, en SUS carpetas")
     # independiente de la política del MCP del usuario (ese es otro interruptor)
     politica(mode="diagrams")
@@ -390,9 +451,9 @@ try:
     try:
         code.pedir("initialize", {"protocolVersion": "2024-11-05"})
         tl = code.lista()
-        check("lista SOLO las 7 code_* (con escanear), aunque el MCP del usuario esté en «diagrams»",
+        check("lista SOLO las 8 code_* (con escanear), aunque el MCP del usuario esté en «diagrams»",
               tl == sorted(["code_map_scan", "code_map_overview", "code_find", "code_who_calls",
-                            "code_calls", "code_impact", "code_quality"]), str(tl))
+                            "code_calls", "code_impact", "code_quality", "code_diff_impact"]), str(tl))
         txt, err = code.tool("list_diagrams")
         check("una tool que no es del code map no existe acá", err and "unknown" in txt, txt[:120])
         txt, err = code.tool("code_map_scan", {"path": afuera})
@@ -403,6 +464,10 @@ try:
                   not err and "refreshed" in txt, txt[:200])
             txt, err = code.tool("code_impact", {"map": "Code map proj", "target": "save"})
             check("consulta con frescura VERIFICADA (su carpeta)", not err and "map is current" in txt, txt[:200])
+            if GIT:
+                txt, err = code.tool("code_diff_impact", {"map": "Code map proj"})
+                check("y el diff de SU carpeta también (git lo corre el servidor, dentro de sus raíces)",
+                      not err and "proj/store.js:3  save" in txt, txt[:300])
     finally:
         code.cerrar()
     if PUEDE_ESCANEAR:

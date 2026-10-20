@@ -24,12 +24,12 @@ SERVER = os.path.join(BACKEND, "server.py")
 ok = fail = 0
 
 # Las del nivel "diagramas": las 5 de siempre + las 8 de memoria (diagram_memory.py)
-# + las 6 que CONSULTAN un code map (codemap.py; escanear es del nivel "files")
+# + las 7 que CONSULTAN un code map (codemap.py; escanear es del nivel "files")
 DIAGRAM_TOOLS = sorted(["diagram_schema", "list_diagrams", "read_diagram", "write_diagram", "create_diagram",
                         "memory_overview", "memory_search", "memory_read", "memory_add",
                         "memory_update", "memory_link", "memory_unlink", "memory_delete",
                         "code_map_overview", "code_find", "code_who_calls", "code_calls", "code_impact",
-                        "code_quality"])
+                        "code_quality", "code_diff_impact"])
 
 
 def check(nombre, cond, extra=""):
