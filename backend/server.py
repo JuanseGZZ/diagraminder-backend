@@ -69,7 +69,7 @@ DEFAULT_PORT = 8765
 # del orquestador necesitan la URL propia para hablarle al MCP del editor.
 PORT = DEFAULT_PORT
 NAME = "DiagraMinder"
-VERSION = "0.46.0"   # Code map: Python y Java (tree-sitter), prefijos de routers
+VERSION = "0.47.0"   # Code map: Vue, Svelte y Angular (templates)
 
 # ===================== rutas / disco =====================
 

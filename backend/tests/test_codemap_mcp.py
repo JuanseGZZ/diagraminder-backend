@@ -456,14 +456,15 @@ try:
             "global.d.ts": "declare const VERSION: string;\n",
             "worker/main.go": "package main\nfunc main() {}\n",
             "worker/jobs.py": "from fastapi import FastAPI\napi = FastAPI()\n\n@api.post(\"/jobs\")\ndef run():\n    pass\n",
+            "Panel.vue": "<template>\n  <button @click=\"go\">Go</button>\n</template>\n<script setup>\nimport { save } from './lib/store';\nfunction go() { save({}); }\n</script>\n",
         }.items():
             p2 = os.path.join(tsp, rel)
             os.makedirs(os.path.dirname(p2), exist_ok=True)
             with open(p2, "w", encoding="utf-8") as f:
                 f.write(src)
         txt, err = mcp.tool("code_map_scan", {"path": "tsproj"})
-        check("code_map_scan de un proyecto TS + Python: 4 archivos (.ts, .tsx y el .py), el .d.ts afuera",
-              not err and "4 files" in txt, txt[:200])
+        check("code_map_scan de un proyecto TS + Python + Vue: 5 archivos (.ts, .tsx, .py y .vue), el .d.ts afuera",
+              not err and "5 files" in txt, txt[:200])
         check("…y dice lo que dejó AFUERA por el lenguaje (1 .go), no lo calla",
               "NOT in the map" in txt and "1 .go" in txt, txt[:300])
         txt, err = mcp.tool("code_map_overview", {"map": "Code map tsproj"})
@@ -478,6 +479,8 @@ try:
         check("Python (tree-sitter, desde el backend): el endpoint de FastAPI está en el mapa", not err and "POST /jobs" in txt, txt[:300])
         txt, err = mcp.tool("code_impact", {"map": "Code map tsproj", "target": "worker/jobs.py:run"})
         check("…y `ruta.py:nombre` se resuelve: a run llega ese ENDPOINT", not err and "ENDPOINT" in txt and "POST /jobs" in txt, txt[:500])
+        txt, err = mcp.tool("code_who_calls", {"map": "Code map tsproj", "symbol": "Panel.vue:go"})
+        check("Vue desde el backend: el @click del template llega a go (línea 2 del .vue)", not err and "Panel.vue:2" in txt and "click" in txt, txt[:400])
         txt, err = mcp.tool("code_impact", {"map": "Code map tsproj", "target": "lib/types.ts"})
         check("`import type` se marca como solo tipos (no existe al correr)", not err and "type-only import" in txt, txt[:500])
 

@@ -34,11 +34,11 @@ MAX_FILES = 4000
 MAX_BYTES = int(1.5 * 1024 * 1024)
 # JS, TypeScript y JSX (paso 3), Python y Java (tree-sitter); un .d.ts son solo tipos. La
 # MISMA regla que isJsPath + langOf de la web.
-_JS = re.compile(r"\.(m?js|cjs|jsx|m?ts|cts|tsx|py|java)$", re.I)
+_JS = re.compile(r"\.(m?js|cjs|jsx|m?ts|cts|tsx|py|java|vue|svelte|component\.html)$", re.I)
 _MIN = re.compile(r"(\.min\.js|\.d\.[mc]?ts)$", re.I)
 # Código que el mapa TODAVÍA no analiza: se cuenta y se dice («2 .py not in the map»). La
 # MISMA lista que unsupportedExt de analyzer.js.
-_UNSUP = re.compile(r"\.(go|rb|php|cs|kt|kts|rs|swift|scala|vue|svelte|c|cc|cpp|h|hpp)$", re.I)
+_UNSUP = re.compile(r"\.(go|rb|php|cs|kt|kts|rs|swift|scala|c|cc|cpp|h|hpp)$", re.I)
 _UNSUP_DIRS = {"venv", ".venv", "__pycache__"}
 
 KINDS = ["function", "method", "event", "module", "class"]
