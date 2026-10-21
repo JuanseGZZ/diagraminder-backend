@@ -69,7 +69,7 @@ DEFAULT_PORT = 8765
 # del orquestador necesitan la URL propia para hablarle al MCP del editor.
 PORT = DEFAULT_PORT
 NAME = "DiagraMinder"
-VERSION = "0.48.0"   # /projects/move y /codemap/source («View code»)
+VERSION = "0.49.0"   # skills al día (Object, orquestador, organigrama) y la base del mock en list_diagrams
 
 # ===================== rutas / disco =====================
 

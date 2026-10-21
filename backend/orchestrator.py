@@ -1582,7 +1582,7 @@ def build_system(ctx, graph, node, notes):
             "answering, do it normally.")
     elif not _has_editor(ctx, graph, nid):
         partes.append(
-            "HEADS UP: you have no EDITOR resource assigned, so you have nowhere to write "
+            "HEADS UP: you have no Folder or GitHub resource assigned, so you have nowhere to write "
             "code or loose files — only the diagrams above. If what you were asked for "
             "needs a code project, ask with `ask_user` so they assign you "
             "one instead of improvising.")
@@ -2417,7 +2417,7 @@ def _cli_system(ctx, graph, node, notes):
             "YOU ARE A CONFINED AGENT (decision X): you do NOT have the projects folder mounted and "
             "your native file tools (Read/Write/Edit/Bash/Glob/Grep) are DISABLED. "
             "Don't look for them and don't try to `cd`: they don't exist for you.\n"
-            "YOU WORK WITH THESE, one batch per editor resource (`<id>` is the resource's, see "
+            "YOU WORK WITH THESE, one batch per Folder/GitHub resource (`<id>` is the resource's, see "
             "YOUR RESOURCES above):\n"
             "- `mcp__dmfs<id>__fs_tree` — list ONE level (the equivalent of `ls`; pass `dir` "
             "to go down into a subdirectory)\n"
@@ -2468,17 +2468,17 @@ def _cli_system(ctx, graph, node, notes):
             "YOU HAVE NO RESOURCES ASSIGNED. There is no folder and no file you can "
             "touch, and you are not supposed to find one yourself: if the task involves reading or "
             "writing code or files, do NOT attempt it — use `CONTROL: {\"action\":\"ask_user\", "
-            "\"question\":\"...\"}` and ask them to wire an editor resource to you (or ask where "
+            "\"question\":\"...\"}` and ask them to wire a Folder or GitHub resource to you (or ask where "
             "they want you to work). If the task is just thinking or answering, do it normally.")
     elif not any_editor:
         partes.append(
-            "HEADS UP: you have no EDITOR resource assigned, so you have nowhere to write "
+            "HEADS UP: you have no Folder or GitHub resource assigned, so you have nowhere to write "
             "code or loose files — only the diagrams above. If what you were asked for "
             "needs a code project, do NOT improvise a path: ask with "
             "`CONTROL: {\"action\":\"ask_user\",\"question\":\"...\"}` so they "
-            "assign you an editor resource.")
+            "assign you a Folder or GitHub resource.")
     else:
-        reglas.insert(1, "All file work happens INSIDE your editor resources: they are "
+        reglas.insert(1, "All file work happens INSIDE your Folder/GitHub resources: they are "
                          "the only place where you can write and where the user can review and "
                          "undo what you did. Do not create files anywhere else.")
     # El SHELL (Bash en POSIX, PowerShell en Windows): un agente no confinado lo tiene

@@ -107,7 +107,8 @@ try:
 
     # --- sembrar dos diagramas en disco, como los deja el mirror ---
     root = json.loads(urllib.request.urlopen(f"{base}/config?token={token}").read())["root"]
-    for carpeta, nombre, tipo in [("Local", "Mapa", "cart"), ("Local", "Pendientes", "activities")]:
+    for carpeta, nombre, tipo in [("Local", "Mapa", "cart"), ("Local", "Pendientes", "activities"),
+                                  ("Local", "Modelo", "object")]:
         d = os.path.join(root, carpeta, nombre)
         os.makedirs(d, exist_ok=True)
         with open(os.path.join(d, "tree.json"), "w", encoding="utf-8") as f:
@@ -128,9 +129,16 @@ try:
     if err or not txt.startswith("["):
         print("     (respuesta cruda:", txt[:300], ")")
     filas = json.loads(txt) if (not err and txt.startswith("[")) else []
-    check("list_diagrams trae los dos sembrados", len(filas) == 2, txt[:160])
+    check("list_diagrams trae los tres sembrados", len(filas) == 3, txt[:160])
     check("y dice de qué tipo es cada uno",
-          {f["name"]: f["type"] for f in filas} == {"Mapa": "cart", "Pendientes": "activities"}, txt[:160])
+          {f["name"]: f["type"] for f in filas} == {"Mapa": "cart", "Pendientes": "activities", "Modelo": "object"},
+          txt[:160])
+    # el id del proyecto no está en su tree.json: sin esta URL el agente no puede llamar
+    # a los Endpoints (el mock) de un object
+    modelo = next((f for f in filas if f["name"] == "Modelo"), {})
+    check("un object trae la base de su mock (con el id del proyecto)",
+          str(modelo.get("mock", "")).startswith(base + "/mock/"), json.dumps(modelo))
+    check("  y los demás tipos no", all("mock" not in f for f in filas if f["name"] != "Modelo"), txt[:200])
 
     txt, err = mcp.tool("read_diagram", {"name": "Mapa"})
     check("read_diagram devuelve el tree.json", not err and json.loads(txt).get("sembrado") is True, txt[:120])

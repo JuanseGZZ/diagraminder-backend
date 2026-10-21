@@ -56,7 +56,8 @@ TOOLS = [
             "Call this FIRST — the other tools take the diagram by name, and the name you "
             "need is the one here. `type` tells you what the diagram is for: cart (an org "
             "chart: the project's documentation), freestyle (a free canvas: associative "
-            "memory), activities (an ordered to-do), object (data model / UML), "
+            "memory), activities (an ordered to-do), object (data model + API tests and mocks; "
+            "its row carries `mock`, the base URL its Endpoint nodes are served at), "
             "orchestrator (a team of AI agents), treeQuestionary, documents, codemap (a "
             "scanned map of a JavaScript/TypeScript/Python/Java code base — query it with the code_* tools, never "
             "read it whole)."
@@ -391,16 +392,24 @@ def _buscar(nombre, carpeta):
 def call_tool(name, args):
     """(texto, is_error). El texto va al modelo → en inglés."""
     if name == "list_diagrams":
-        todos, err = _proyectos()
+        st, err = _api("/state")
         if err:
             return err, True
         filas = []
-        for folder, nombre, tj in todos:
-            try:
-                tipo = json.loads(tj).get("type") or "?"
-            except Exception:
-                tipo = "?"
-            filas.append({"folder": folder, "name": nombre, "type": tipo})
+        for f in (st.get("folders") or []):
+            for p in (f.get("projects") or []):
+                try:
+                    tipo = json.loads(p.get("treeJson") or "").get("type") or "?"
+                except Exception:
+                    tipo = "?"
+                fila = {"folder": f.get("name"), "name": p.get("name"), "type": tipo}
+                # La base del mock de un object lleva el id del proyecto, que NO está en su
+                # tree.json (vive en el index.json de la carpeta): sin esto el agente no
+                # tiene cómo llamar a sus Endpoints. Es la misma URL que muestra el panel
+                # «Mock» de la web.
+                if tipo == "object" and p.get("id"):
+                    fila["mock"] = f"{BASE}/mock/{p.get('id')}"
+                filas.append(fila)
         if not filas:
             return "The user has no diagrams yet.", False
         return json.dumps(filas, ensure_ascii=False), False
